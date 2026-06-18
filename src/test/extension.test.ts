@@ -3,11 +3,15 @@ import * as vscode from 'vscode';
 import {
 	extractCheckableEnglishSegments,
 	findChineseText,
+	findCommentText,
 	findEnglishWords,
+	findFeedbackLines,
+	findQuestionLines,
 	hashText,
 	parseAiValidationIssues,
 	validateEnlearnFormatText
 } from '../enlearnValidation';
+import { normalizeAsciiPunctuation } from '../punctuation';
 import {
 	buildPredictionContext,
 	parsePredictionResult,
@@ -20,7 +24,10 @@ import {
 	parseRelatedWordsResult
 } from '../relatedWords';
 import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
-import { SIDEBAR_KEY_ICON_SIZE_PX } from '../extension';
+import {
+	SIDEBAR_ACTION_ICON_SIZE_PX,
+	SIDEBAR_KEY_ICON_SIZE_PX
+} from '../extension';
 import {
 	DEFAULT_TTS_SETTINGS,
 	buildPowerShellMediaPlayerScript,
@@ -139,14 +146,25 @@ suite('English Learning Plugin extension', () => {
 			'resources/keys/key-x.png',
 			'resources/keys/key-d.png'
 		]);
+		assert.deepStrictEqual(ENGLISH_LEARNING_ACTIONS.map(action => action.actionIconPath), [
+			'resources/actions/action-explain.png',
+			'resources/actions/action-translate.png',
+			'resources/actions/action-summarize.png',
+			'resources/actions/action-practice.png',
+			'resources/actions/action-block.png',
+			'resources/actions/action-related.png',
+			'resources/actions/action-audio.png'
+		]);
 
 		for (const action of ENGLISH_LEARNING_ACTIONS) {
 			assert.ok(action.label.length <= 8);
 			assert.ok(action.shortcut.startsWith('Ctrl+Shift+Alt+'));
 			assert.ok(action.iconPath.endsWith('.png'));
+			assert.ok(action.actionIconPath.startsWith('resources/actions/'));
 		}
 
 		assert.ok(SIDEBAR_KEY_ICON_SIZE_PX >= 48);
+		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX >= 48);
 	});
 
 	test('contributes validation and highlighting settings', () => {
@@ -164,6 +182,15 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(properties['englishLearning.highlight.chineseText.enabled']);
 		assert.ok(properties['englishLearning.highlight.chineseText.color']);
 		assert.strictEqual((properties['englishLearning.highlight.chineseText.color'] as { default: string }).default, '#F2994A');
+		assert.ok(properties['englishLearning.highlight.questionLine.enabled']);
+		assert.ok(properties['englishLearning.highlight.questionLine.color']);
+		assert.strictEqual((properties['englishLearning.highlight.questionLine.color'] as { default: string }).default, '#56CCF2');
+		assert.ok(properties['englishLearning.highlight.feedbackLine.enabled']);
+		assert.ok(properties['englishLearning.highlight.feedbackLine.color']);
+		assert.strictEqual((properties['englishLearning.highlight.feedbackLine.color'] as { default: string }).default, '#F2C94C');
+		assert.ok(properties['englishLearning.highlight.commentText.enabled']);
+		assert.ok(properties['englishLearning.highlight.commentText.color']);
+		assert.strictEqual((properties['englishLearning.highlight.commentText.color'] as { default: string }).default, '#8A8A8A');
 		assert.ok(properties['englishLearning.prediction.enabled']);
 		assert.ok(properties['englishLearning.prediction.showTranslationHover']);
 		assert.ok(properties['englishLearning.prediction.maxContextChars']);
@@ -200,6 +227,41 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual(matches[1].line, 2);
 	});
 
+	test('matches parenthetical notes and line comments for grey highlighting', () => {
+		const matches = findCommentText([
+			'I want an apple. (PS: 这里解释 an 的用法.)',
+			'// comment 注释内容',
+			'I need (课程) today.'
+		].join('\n'));
+
+		assert.deepStrictEqual(matches.map(match => match.text), [
+			'(PS: 这里解释 an 的用法.)',
+			'// comment 注释内容',
+			'(课程)'
+		]);
+		assert.strictEqual(matches[0].line, 0);
+		assert.strictEqual(matches[1].startCharacter, 0);
+		assert.strictEqual(matches[2].line, 2);
+	});
+
+	test('matches question and feedback lines for semantic highlighting', () => {
+		const text = [
+			'? translate 我需要提高我的英语口语.',
+			'  ? cloze I want to ____ English documents.',
+			'I need help? This is not a question line.',
+			'! 批改: 正确. 回答正确.',
+			'Text ! not feedback.'
+		].join('\n');
+
+		const questionLines = findQuestionLines(text);
+		const feedbackLines = findFeedbackLines(text);
+
+		assert.deepStrictEqual(questionLines.map(match => match.line), [0, 1]);
+		assert.strictEqual(questionLines[0].text, '? translate 我需要提高我的英语口语.');
+		assert.deepStrictEqual(feedbackLines.map(match => match.line), [3]);
+		assert.strictEqual(feedbackLines[0].text, '! 批改: 正确. 回答正确.');
+	});
+
 	test('validates local .enlearn format issues', () => {
 		const issues = validateEnlearnFormatText([
 			'@ bad',
@@ -227,12 +289,13 @@ suite('English Learning Plugin extension', () => {
 			endLine: 2,
 			endCharacter: 0
 		}]), 2);
-		assert.strictEqual(normalizeInsertedTranslation('\n我想学习英语。\n'), '我想学习英语。');
+		assert.strictEqual(normalizeInsertedTranslation('\n我想学习英语。\n'), '我想学习英语.');
 		assert.strictEqual(isSingleEnglishWord('lesson'), true);
 		assert.strictEqual(isSingleEnglishWord("don't"), true);
 		assert.strictEqual(isSingleEnglishWord('reading-speed'), true);
 		assert.strictEqual(isSingleEnglishWord('one lesson'), false);
 		assert.strictEqual(formatInlineTranslation('（课程。）'), '(课程)');
+		assert.strictEqual(normalizeAsciiPunctuation('中文，标点：示例；结束。'), '中文,标点:示例;结束.');
 	});
 
 	test('collects sentence context and formats inline PS explanations', () => {
@@ -263,11 +326,11 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual(multiline.endLine, 1);
 		assert.strictEqual(
 			formatPsExplanation('PS: an 用在 apple 前，因为 apple 以元音音素开头。'),
-			'（PS: an 用在 apple 前，因为 apple 以元音音素开头。）'
+			'(PS: an 用在 apple 前,因为 apple 以元音音素开头.)'
 		);
 		assert.strictEqual(
 			formatPsExplanation('（PS: an 是不定冠词，用于 apple 前。）'),
-			'（PS: an 是不定冠词，用于 apple 前。）'
+			'(PS: an 是不定冠词,用于 apple 前.)'
 		);
 	});
 
@@ -318,7 +381,7 @@ suite('English Learning Plugin extension', () => {
 
 			assert.strictEqual(
 				document.getText(),
-				'I want an apple.（PS: an 用在 apple 前，因为 apple 以元音音素开头。）\n'
+				'I want an apple.(PS: an 用在 apple 前,因为 apple 以元音音素开头.)\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();
@@ -425,7 +488,7 @@ suite('English Learning Plugin extension', () => {
 
 			assert.strictEqual(
 				document.getText(),
-				'I can study every day.\n我每天都能学习。\n'
+				'I can study every day.\n我每天都能学习.\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();
@@ -482,7 +545,7 @@ suite('English Learning Plugin extension', () => {
 
 			const text = document.getText();
 			assert.ok(text.includes('## Practice: AI Review '));
-			assert.ok(text.includes('? translate 我每天都能学习。'));
+			assert.ok(text.includes('? translate 我每天都能学习.'));
 			assert.ok(text.includes('? cloze I can ____ every day.'));
 			assert.ok(text.includes('? translate I will learn one lesson per day.'));
 			assert.ok(!text.includes('{'));
@@ -544,7 +607,7 @@ suite('English Learning Plugin extension', () => {
 
 			assert.strictEqual(
 				document.getText(),
-				'I studying every day.\n! 批改：错误。 动词形式不对。 建议：I study every day. 原因：can 后应接动词原形，不能用 studying。\nNext line.\n'
+				'I studying every day.\n! 批改: 错误. 动词形式不对. 建议: I study every day. 原因: can 后应接动词原形,不能用 studying.\nNext line.\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();
@@ -600,7 +663,7 @@ suite('English Learning Plugin extension', () => {
 
 			assert.strictEqual(
 				document.getText(),
-				'I study every day.\n! 批改：正确。 答案自然，表达正确。\n'
+				'I study every day.\n! 批改: 正确. 答案自然,表达正确.\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();
@@ -649,6 +712,7 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual(issues[0].kind, 'grammar');
 		assert.strictEqual(issues[0].text, 'He go');
 		assert.strictEqual(issues[0].segmentId, 'line-1-abc');
+		assert.strictEqual(issues[0].message, '语法错误:主谓不一致.');
 		assert.strictEqual(issues[0].suggestion, 'He goes');
 	});
 
@@ -668,9 +732,10 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(result);
 		assert.strictEqual(result.source, 'improve');
 		assert.strictEqual(result.words.length, 5);
+		assert.strictEqual(result.words[0].meaning, '提高;增强');
 		assert.strictEqual(getEnglishWordAt("I don't like reading-speed.", 4), "don't");
 		assert.strictEqual(normalizeRelatedWordInput(' improve this'), 'improve');
-		assert.ok(formatRelatedWordBlock(result.words[0]).includes(': note 相关领域：能力提升'));
+		assert.ok(formatRelatedWordBlock(result.words[0]).includes(': note 相关领域: 能力提升'));
 	});
 
 	test('normalizes and validates TTS text', () => {
@@ -709,7 +774,7 @@ suite('English Learning Plugin extension', () => {
 
 		assert.ok(prediction);
 		assert.strictEqual(prediction.completion, 'and practice speaking every day.');
-		assert.strictEqual(prediction.translation, '并且每天练习口语。');
+		assert.strictEqual(prediction.translation, '并且每天练习口语.');
 	});
 
 	test('rejects unsafe prediction completions', () => {

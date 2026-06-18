@@ -4,6 +4,7 @@ export interface EnglishLearningAction {
 	command: string;
 	shortcut: string;
 	iconPath: string;
+	actionIconPath: string;
 	requiresSelection: boolean;
 }
 
@@ -14,6 +15,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.explainSelection',
 		shortcut: 'Ctrl+Shift+Alt+Q',
 		iconPath: 'resources/keys/key-q.png',
+		actionIconPath: 'resources/actions/action-explain.png',
 		requiresSelection: true
 	},
 	{
@@ -22,6 +24,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.translateSelection',
 		shortcut: 'Ctrl+Shift+Alt+W',
 		iconPath: 'resources/keys/key-w.png',
+		actionIconPath: 'resources/actions/action-translate.png',
 		requiresSelection: true
 	},
 	{
@@ -30,6 +33,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.summarizeLearningContent',
 		shortcut: 'Ctrl+Shift+Alt+E',
 		iconPath: 'resources/keys/key-e.png',
+		actionIconPath: 'resources/actions/action-summarize.png',
 		requiresSelection: false
 	},
 	{
@@ -38,6 +42,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.practiceOrGradeSelection',
 		shortcut: 'Ctrl+Shift+Alt+C',
 		iconPath: 'resources/keys/key-c.png',
+		actionIconPath: 'resources/actions/action-practice.png',
 		requiresSelection: false
 	},
 	{
@@ -46,6 +51,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.insertEnlearnBlock',
 		shortcut: 'Ctrl+Shift+Alt+Z',
 		iconPath: 'resources/keys/key-z.png',
+		actionIconPath: 'resources/actions/action-block.png',
 		requiresSelection: true
 	},
 	{
@@ -54,6 +60,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.generateRelatedWords',
 		shortcut: 'Ctrl+Shift+Alt+X',
 		iconPath: 'resources/keys/key-x.png',
+		actionIconPath: 'resources/actions/action-related.png',
 		requiresSelection: false
 	},
 	{
@@ -62,6 +69,7 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		command: 'englishLearning.playSelectionAudio',
 		shortcut: 'Ctrl+Shift+Alt+D',
 		iconPath: 'resources/keys/key-d.png',
+		actionIconPath: 'resources/actions/action-audio.png',
 		requiresSelection: true
 	}
 ];

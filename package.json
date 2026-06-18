@@ -2,7 +2,7 @@
   "name": "english-learning-plugin",
   "displayName": "英语学习插件",
   "description": "面向 VS Code 的 AI 英语学习工具。",
-  "version": "0.0.12",
+  "version": "0.0.16",
   "publisher": "luciferfor",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -240,6 +240,36 @@
           "type": "string",
           "default": "#F2994A",
           "description": "Decoration color for Chinese text in .enlearn files."
+        },
+        "englishLearning.highlight.questionLine.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight .enlearn question lines that start with ?."
+        },
+        "englishLearning.highlight.questionLine.color": {
+          "type": "string",
+          "default": "#56CCF2",
+          "description": "Decoration color for .enlearn question lines."
+        },
+        "englishLearning.highlight.feedbackLine.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight .enlearn feedback or grading lines that start with !."
+        },
+        "englishLearning.highlight.feedbackLine.color": {
+          "type": "string",
+          "default": "#F2C94C",
+          "description": "Decoration color for .enlearn feedback or grading lines."
+        },
+        "englishLearning.highlight.commentText.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight parenthetical notes and // comments in .enlearn files with a comment color."
+        },
+        "englishLearning.highlight.commentText.color": {
+          "type": "string",
+          "default": "#8A8A8A",
+          "description": "Decoration color for parenthetical notes and // comments in .enlearn files."
         },
         "englishLearning.prediction.enabled": {
           "type": "boolean",

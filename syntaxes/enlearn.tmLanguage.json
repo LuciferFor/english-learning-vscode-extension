@@ -4,6 +4,7 @@
   "scopeName": "source.enlearn",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#parentheticalComment" },
     { "include": "#headings" },
     { "include": "#metadata" },
     { "include": "#sourceText" },
@@ -18,6 +19,10 @@
     "comments": {
       "name": "comment.line.double-slash.enlearn",
       "match": "^\\s*//.*$"
+    },
+    "parentheticalComment": {
+      "name": "comment.parenthetical.enlearn",
+      "match": "[（(][^\\n()（）]*[）)]"
     },
     "headings": {
       "name": "markup.heading.enlearn",
@@ -69,20 +74,19 @@
       }
     },
     "annotation": {
-      "name": "markup.changed.annotation.enlearn",
+      "name": "markup.changed.feedback-line.enlearn",
       "match": "^\\s*(!)(\\s.*)?$",
       "captures": {
-        "1": { "name": "keyword.operator.annotation.enlearn" },
-        "2": { "name": "string.unquoted.annotation.enlearn" }
+        "1": { "name": "keyword.operator.feedback.enlearn" },
+        "2": { "name": "markup.changed.feedback-text.enlearn" }
       }
     },
     "practice": {
-      "name": "meta.practice.enlearn",
-      "match": "^\\s*(\\?\\s*)(translate|cloze)(\\b.*)?$",
+      "name": "markup.other.question-line.enlearn",
+      "match": "^\\s*(\\?)(\\s.*)?$",
       "captures": {
-        "1": { "name": "keyword.operator.practice.enlearn" },
-        "2": { "name": "support.function.practice-type.enlearn" },
-        "3": { "name": "string.unquoted.practice.enlearn" }
+        "1": { "name": "keyword.operator.question.enlearn" },
+        "2": { "name": "markup.other.question-text.enlearn" }
       }
     },
     "cloze": {

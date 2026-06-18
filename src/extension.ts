@@ -8,7 +8,10 @@ import {
 	EnlearnValidationIssue,
 	extractCheckableEnglishSegments,
 	findChineseText,
+	findCommentText,
 	findEnglishWords,
+	findFeedbackLines,
+	findQuestionLines,
 	parseAiValidationIssues,
 	validateEnlearnFormatText
 } from './enlearnValidation';
@@ -26,6 +29,7 @@ import {
 	normalizeRelatedWordInput,
 	parseRelatedWordsResult
 } from './relatedWords';
+import { normalizeAsciiPunctuation } from './punctuation';
 import {
 	ENGLISH_LEARNING_ACTIONS,
 	EnglishLearningAction
@@ -53,6 +57,7 @@ const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
 const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
+const ASCII_PUNCTUATION_PROMPT_RULE = 'All punctuation in JSON string values must be ASCII punctuation only. Use , . : ; ? ! ( ) " \' instead of Chinese punctuation, even when the text is Chinese.';
 
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
 type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice';
@@ -159,6 +164,9 @@ let outputChannel: vscode.OutputChannel;
 let enlearnDiagnosticCollection: vscode.DiagnosticCollection;
 let englishWordDecorationType: vscode.TextEditorDecorationType | undefined;
 let chineseTextDecorationType: vscode.TextEditorDecorationType | undefined;
+let questionLineDecorationType: vscode.TextEditorDecorationType | undefined;
+let feedbackLineDecorationType: vscode.TextEditorDecorationType | undefined;
+let commentTextDecorationType: vscode.TextEditorDecorationType | undefined;
 let missingValidationApiKeyNoticeShown = false;
 const validationTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const validationSegmentSnapshots = new Map<string, Set<string>>();
@@ -270,6 +278,9 @@ export function activate(context: vscode.ExtensionContext) {
 				validationTimers.clear();
 				englishWordDecorationType?.dispose();
 				chineseTextDecorationType?.dispose();
+				questionLineDecorationType?.dispose();
+				feedbackLineDecorationType?.dispose();
+				commentTextDecorationType?.dispose();
 				predictionCache.clear();
 				latestPrediction = undefined;
 				stopActiveAudioPlayback();
@@ -308,6 +319,7 @@ type EnglishLearningSidebarMessage = {
 };
 
 export const SIDEBAR_KEY_ICON_SIZE_PX = 56;
+export const SIDEBAR_ACTION_ICON_SIZE_PX = 58;
 
 class EnglishLearningSidebarProvider implements vscode.WebviewViewProvider {
 	private webviewView: vscode.WebviewView | undefined;
@@ -417,10 +429,10 @@ export function renderEnglishLearningSidebarHtml(
 
 		.action-card {
 			display: grid;
-			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px minmax(0, 1fr);
+			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px minmax(0, 1fr) ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
 			align-items: center;
 			gap: 10px;
-			min-height: ${SIDEBAR_KEY_ICON_SIZE_PX + 14}px;
+			min-height: ${Math.max(SIDEBAR_KEY_ICON_SIZE_PX, SIDEBAR_ACTION_ICON_SIZE_PX) + 14}px;
 			padding: 6px 8px;
 		}
 
@@ -441,6 +453,14 @@ export function renderEnglishLearningSidebarHtml(
 			width: ${SIDEBAR_KEY_ICON_SIZE_PX}px;
 			height: ${SIDEBAR_KEY_ICON_SIZE_PX}px;
 			object-fit: contain;
+		}
+
+		.action-feature-icon {
+			display: block;
+			width: ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
+			height: ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
+			object-fit: contain;
+			justify-self: end;
 		}
 
 		.action-label {
@@ -522,11 +542,15 @@ export function renderEnglishLearningSidebarHtml(
 
 function renderSidebarAction(webview: vscode.Webview, extensionUri: vscode.Uri, action: EnglishLearningAction) {
 	const iconUri = action.iconPath ? webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, action.iconPath)).toString() : '';
+	const actionIconUri = action.actionIconPath ? webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, action.actionIconPath)).toString() : '';
 	const status = action.requiresSelection ? '需选中' : '可直接用';
 	const alt = `${action.shortcut} ${action.label}`;
 	const icon = iconUri
 		? `<img class="action-icon" src="${escapeHtmlAttribute(iconUri)}" alt="${escapeHtmlAttribute(alt)}">`
 		: `<span class="action-icon" aria-hidden="true"></span>`;
+	const actionIcon = actionIconUri
+		? `<img class="action-feature-icon" src="${escapeHtmlAttribute(actionIconUri)}" alt="${escapeHtmlAttribute(action.label)} 功能图标">`
+		: `<span class="action-feature-icon" aria-hidden="true"></span>`;
 
 	return `<button class="action-card" type="button" data-action-id="${escapeHtmlAttribute(action.id)}" title="${escapeHtmlAttribute(`${action.label}\n${action.shortcut} · ${status}`)}">
 		${icon}
@@ -534,6 +558,7 @@ function renderSidebarAction(webview: vscode.Webview, extensionUri: vscode.Uri, 
 			<span class="action-label">${escapeHtml(action.label)}</span>
 			<span class="action-meta">${escapeHtml(action.shortcut)} · ${escapeHtml(status)}</span>
 		</span>
+		${actionIcon}
 	</button>`;
 }
 
@@ -685,7 +710,7 @@ async function requestDeepSeekPrediction(
 		messages: [
 			{
 				role: 'system',
-				content: 'You predict concise natural English continuations for Chinese-speaking learners. Respond only with valid json.'
+				content: `You predict concise natural English continuations for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
 			},
 			{
 				role: 'user',
@@ -697,6 +722,7 @@ Rules:
 - Provide a Chinese translation in "translation".
 - Do not repeat the text already typed before the cursor.
 - Do not add markdown fences.
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 
 Return valid json only:
 {
@@ -757,6 +783,9 @@ function isEnlearnDocument(document: vscode.TextDocument) {
 function refreshTextDecorations() {
 	englishWordDecorationType?.dispose();
 	chineseTextDecorationType?.dispose();
+	questionLineDecorationType?.dispose();
+	feedbackLineDecorationType?.dispose();
+	commentTextDecorationType?.dispose();
 
 	const englishConfig = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords');
 	const englishColor = englishConfig.get<string>('color')?.trim() || '#2F80ED';
@@ -770,6 +799,27 @@ function refreshTextDecorations() {
 	chineseTextDecorationType = vscode.window.createTextEditorDecorationType({
 		color: chineseColor,
 		fontWeight: '600'
+	});
+
+	const questionConfig = vscode.workspace.getConfiguration('englishLearning.highlight.questionLine');
+	const questionColor = questionConfig.get<string>('color')?.trim() || '#56CCF2';
+	questionLineDecorationType = vscode.window.createTextEditorDecorationType({
+		color: questionColor,
+		fontWeight: '600'
+	});
+
+	const feedbackConfig = vscode.workspace.getConfiguration('englishLearning.highlight.feedbackLine');
+	const feedbackColor = feedbackConfig.get<string>('color')?.trim() || '#F2C94C';
+	feedbackLineDecorationType = vscode.window.createTextEditorDecorationType({
+		color: feedbackColor,
+		fontWeight: '600'
+	});
+
+	const commentConfig = vscode.workspace.getConfiguration('englishLearning.highlight.commentText');
+	const commentColor = commentConfig.get<string>('color')?.trim() || '#8A8A8A';
+	commentTextDecorationType = vscode.window.createTextEditorDecorationType({
+		color: commentColor,
+		fontStyle: 'italic'
 	});
 }
 
@@ -788,33 +838,81 @@ function updateEnglishWordHighlightsForDocument(document: vscode.TextDocument) {
 }
 
 function updateEnglishWordHighlights(editor: vscode.TextEditor | undefined) {
-	if (!editor || !englishWordDecorationType || !chineseTextDecorationType) {
+	if (!editor || !englishWordDecorationType || !chineseTextDecorationType || !questionLineDecorationType || !feedbackLineDecorationType || !commentTextDecorationType) {
 		return;
 	}
 
 	const englishEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords').get<boolean>('enabled', true);
 	const chineseEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.chineseText').get<boolean>('enabled', true);
+	const questionEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.questionLine').get<boolean>('enabled', true);
+	const feedbackEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.feedbackLine').get<boolean>('enabled', true);
+	const commentEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.commentText').get<boolean>('enabled', true);
 	if (!isEnlearnDocument(editor.document)) {
 		editor.setDecorations(englishWordDecorationType, []);
 		editor.setDecorations(chineseTextDecorationType, []);
+		editor.setDecorations(questionLineDecorationType, []);
+		editor.setDecorations(feedbackLineDecorationType, []);
+		editor.setDecorations(commentTextDecorationType, []);
 		return;
 	}
 
 	const text = editor.document.getText();
-	const englishRanges = englishEnabled ? findEnglishWords(text).map(match => new vscode.Range(
+	const commentMatches = commentEnabled ? findCommentText(text) : [];
+	const questionMatches = questionEnabled ? findQuestionLines(text) : [];
+	const feedbackMatches = feedbackEnabled ? findFeedbackLines(text) : [];
+	const semanticLineMatches = [...questionMatches, ...feedbackMatches];
+	const englishRanges = englishEnabled ? findEnglishWords(text)
+		.filter(match => !overlapsCommentText(match, commentMatches))
+		.filter(match => !overlapsCommentText(match, semanticLineMatches))
+		.map(match => new vscode.Range(
+			match.line,
+			match.startCharacter,
+			match.line,
+			match.endCharacter
+		)) : [];
+	const chineseRanges = chineseEnabled ? findChineseText(text)
+		.filter(match => !overlapsCommentText(match, commentMatches))
+		.filter(match => !overlapsCommentText(match, semanticLineMatches))
+		.map(match => new vscode.Range(
+			match.line,
+			match.startCharacter,
+			match.line,
+			match.endCharacter
+		)) : [];
+	const questionRanges = questionMatches.map(match => new vscode.Range(
 		match.line,
 		match.startCharacter,
 		match.line,
 		match.endCharacter
-	)) : [];
-	const chineseRanges = chineseEnabled ? findChineseText(text).map(match => new vscode.Range(
+	));
+	const feedbackRanges = feedbackMatches.map(match => new vscode.Range(
 		match.line,
 		match.startCharacter,
 		match.line,
 		match.endCharacter
-	)) : [];
+	));
+	const commentRanges = commentMatches.map(match => new vscode.Range(
+		match.line,
+		match.startCharacter,
+		match.line,
+		match.endCharacter
+	));
 	editor.setDecorations(englishWordDecorationType, englishRanges);
 	editor.setDecorations(chineseTextDecorationType, chineseRanges);
+	editor.setDecorations(questionLineDecorationType, questionRanges);
+	editor.setDecorations(feedbackLineDecorationType, feedbackRanges);
+	editor.setDecorations(commentTextDecorationType, commentRanges);
+}
+
+function overlapsCommentText(
+	match: { line: number; startCharacter: number; endCharacter: number },
+	commentMatches: Array<{ line: number; startCharacter: number; endCharacter: number }>
+) {
+	return commentMatches.some(comment =>
+		comment.line === match.line &&
+		match.startCharacter < comment.endCharacter &&
+		match.endCharacter > comment.startCharacter
+	);
 }
 
 function scheduleEnlearnValidation(context: vscode.ExtensionContext, document: vscode.TextDocument) {
@@ -1066,7 +1164,7 @@ async function requestDeepSeekValidationIssues(apiKey: string, segments: Enlearn
 		messages: [
 			{
 				role: 'system',
-				content: 'You are an English spelling, grammar, and usage checker for .enlearn study notes. Respond only with valid json.'
+				content: `You are an English spelling, grammar, and usage checker for .enlearn study notes. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
 			},
 			{
 				role: 'user',
@@ -1081,7 +1179,7 @@ Return valid json only. Use this JSON shape:
       "segmentId": "segment id from input",
       "text": "wrong text",
       "kind": "spelling | grammar | usage",
-      "message": "语法错误：explain the issue in Chinese",
+      "message": "语法错误: explain the issue in Chinese",
       "suggestion": "correct text",
       "severity": "error | warning"
     }
@@ -1089,6 +1187,7 @@ Return valid json only. Use this JSON shape:
 }
 
 The word "json" is intentionally included because the API JSON mode requires it.
+${ASCII_PUNCTUATION_PROMPT_RULE}
 
 Segments:
 ${JSON.stringify(segments.map(segment => ({
@@ -1173,8 +1272,8 @@ function toDiagnosticMessage(issue: EnlearnValidationIssue) {
 		usage: '表达不自然',
 		format: '格式错误'
 	}[issue.kind];
-	const message = issue.message.startsWith(label) ? issue.message : `${label}：${issue.message}`;
-	return issue.suggestion ? `${message}\n建议：${issue.suggestion}` : message;
+	const message = issue.message.startsWith(label) ? issue.message : `${label}: ${issue.message}`;
+	return issue.suggestion ? `${message}\n建议: ${issue.suggestion}` : message;
 }
 
 async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclude<LearningMode, 'enlearn' | 'summarize'>) {
@@ -1796,7 +1895,7 @@ async function requestDeepSeekRelatedWords(apiKey: string, word: string): Promis
 			messages: [
 				{
 					role: 'system',
-					content: 'You generate concise English vocabulary study data for Chinese-speaking learners. Respond only with valid json.'
+					content: `You generate concise English vocabulary study data for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
 				},
 				{
 					role: 'user',
@@ -1808,6 +1907,7 @@ Rules:
 - Keep examples natural and learner-friendly.
 - Meanings and notes should be Chinese.
 - Do not add markdown fences.
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 
 Return valid json only:
 {
@@ -1815,10 +1915,10 @@ Return valid json only:
   "words": [
     {
       "word": "enhance",
-      "meaning": "提高；增强",
+      "meaning": "提高;增强",
       "domain": "能力提升",
       "example": "This method can enhance your reading speed.",
-      "note": "比 improve 更强调增强效果。"
+      "note": "比 improve 更强调增强效果."
     }
   ]
 }
@@ -1990,7 +2090,7 @@ async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: 
 			messages: [
 				{
 					role: 'system',
-					content: 'You are an English learning assistant for Chinese-speaking VS Code users. Respond only with valid json. Keep explanations concise and useful for language learning.'
+					content: `You are an English learning assistant for Chinese-speaking VS Code users. Respond only with valid json. Keep explanations concise and useful for language learning. ${ASCII_PUNCTUATION_PROMPT_RULE}`
 				},
 				{
 					role: 'user',
@@ -2038,6 +2138,7 @@ Rules:
 - 说明含义、语法功能、搭配或为什么用这个形式。
 - 如果是冠词 a/an/the，要解释为什么用它以及为什么不是其它冠词。
 - 不要翻译整句，不要输出列表，不要输出 Markdown。
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 - The word "json" is intentionally included because the API JSON mode requires it.
 
 ${text}`;
@@ -2054,8 +2155,9 @@ Return valid json only, without markdown fences. Use this JSON shape:
 
 Rules:
 - 只翻译 selected word 在 sentence context 里的意思。
-- 如果 selected word 是英文，只输出简短中文释义，例如 "课"、"课程"。
+- 如果 selected word 是英文，只输出简短中文释义, 例如 "课", "课程"。
 - 不要翻译整句，不要解释语法，不要输出括号、标点、列表或 Markdown。
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 - The word "json" is intentionally included because the API JSON mode requires it.
 
 ${text}`;
@@ -2078,6 +2180,7 @@ Rules:
 - Do not include answers, hints, answer keys, explanations, or {answer|hint} cloze markers.
 - Cloze questions must use blanks such as ____ instead of revealing the answer.
 - Keep prompts directly related to the vocabulary, grammar, and sentences in the content.
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 - The word "json" is intentionally included because the API JSON mode requires it.
 
 .enlearn content:
@@ -2102,6 +2205,7 @@ Rules:
 - If the answer is correct or acceptable, set correct to true and keep feedback concise.
 - If the answer is wrong or unnatural, set correct to false, provide correction and explanation.
 - Do not rewrite the whole file.
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
 - The word "json" is intentionally included because the API JSON mode requires it.
 
 ${text}`;
@@ -2143,6 +2247,7 @@ ${text}`;
 	return `${task}
 
 The word "json" is intentionally included because the API JSON mode requires it.
+${ASCII_PUNCTUATION_PROMPT_RULE}
 
 ${commonSchema}
 
@@ -2305,29 +2410,29 @@ function formatPracticeGrading(grading: PracticeGrading | undefined) {
 	}
 
 	const status = grading.correct ? '正确' : '错误';
-	const parts = [`! 批改：${status}。`];
+	const parts = [`! 批改: ${status}.`];
 	if (grading.feedback) {
 		parts.push(grading.feedback);
 	}
 	if (!grading.correct && grading.correction) {
-		parts.push(`建议：${grading.correction}`);
+		parts.push(`建议: ${grading.correction}`);
 	}
 	if (!grading.correct && grading.explanation) {
-		parts.push(`原因：${grading.explanation}`);
+		parts.push(`原因: ${grading.explanation}`);
 	}
 
-	return parts.join(' ').replace(/\s+/g, ' ').trim();
+	return normalizeAsciiPunctuation(parts.join(' ').replace(/\s+/g, ' ').trim());
 }
 
 function sanitizePracticePrompt(value: string) {
-	return value
+	return normalizeAsciiPunctuation(value
 		.replace(/^```json\s*/i, '')
 		.replace(/^```\s*/i, '')
 		.replace(/\s*```$/i, '')
 		.replace(/^\s*\?\s*(?:translate|cloze)\b\s*/i, '')
 		.replace(/\{[^{}|]+(?:\|[^{}]+)?\}/g, '____')
 		.replace(/\s+/g, ' ')
-		.trim();
+		.trim());
 }
 
 async function saveLearningRecord(context: vscode.ExtensionContext, record: LearningRecord) {
@@ -2390,13 +2495,13 @@ function prefixLines(text: string, prefix: string) {
 }
 
 function readString(value: unknown) {
-	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+	return typeof value === 'string' && value.trim().length > 0 ? normalizeAsciiPunctuation(value.trim()) : undefined;
 }
 
 function readStringArray(value: unknown) {
 	if (Array.isArray(value)) {
 		return value
-			.map(item => typeof item === 'string' ? item.trim() : JSON.stringify(item))
+			.map(item => typeof item === 'string' ? normalizeAsciiPunctuation(item.trim()) : normalizeAsciiPunctuation(JSON.stringify(item)))
 			.filter(item => item.length > 0);
 	}
 

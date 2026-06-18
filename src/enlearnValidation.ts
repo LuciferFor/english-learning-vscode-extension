@@ -1,3 +1,5 @@
+import { normalizeAsciiPunctuation } from './punctuation';
+
 export type EnlearnDiagnosticKind = 'spelling' | 'grammar' | 'usage' | 'format';
 export type EnlearnDiagnosticSeverity = 'error' | 'warning';
 
@@ -25,6 +27,20 @@ export interface EnglishWordMatch {
 }
 
 export interface ChineseTextMatch {
+	text: string;
+	line: number;
+	startCharacter: number;
+	endCharacter: number;
+}
+
+export interface CommentTextMatch {
+	text: string;
+	line: number;
+	startCharacter: number;
+	endCharacter: number;
+}
+
+export interface SemanticLineMatch {
 	text: string;
 	line: number;
 	startCharacter: number;
@@ -85,6 +101,102 @@ export function findChineseText(text: string): ChineseTextMatch[] {
 				startCharacter: match.index,
 				endCharacter: match.index + match[0].length
 			});
+		}
+	}
+
+	return matches;
+}
+
+export function findCommentText(text: string): CommentTextMatch[] {
+	return [
+		...findLineCommentText(text),
+		...findParentheticalText(text)
+	].sort((first, second) =>
+		first.line - second.line || first.startCharacter - second.startCharacter
+	);
+}
+
+export function findQuestionLines(text: string): SemanticLineMatch[] {
+	return findSemanticLines(text, '?');
+}
+
+export function findFeedbackLines(text: string): SemanticLineMatch[] {
+	return findSemanticLines(text, '!');
+}
+
+function findSemanticLines(text: string, marker: '?' | '!'): SemanticLineMatch[] {
+	const matches: SemanticLineMatch[] = [];
+	const lines = text.split(/\r?\n/);
+
+	for (let line = 0; line < lines.length; line++) {
+		const firstNonWhitespace = lines[line].search(/\S/);
+		if (firstNonWhitespace >= 0 && lines[line][firstNonWhitespace] === marker) {
+			matches.push({
+				text: lines[line],
+				line,
+				startCharacter: 0,
+				endCharacter: Math.max(lines[line].length, 1)
+			});
+		}
+	}
+
+	return matches;
+}
+
+export function findLineCommentText(text: string): CommentTextMatch[] {
+	const matches: CommentTextMatch[] = [];
+	const lines = text.split(/\r?\n/);
+
+	for (let line = 0; line < lines.length; line++) {
+		const startCharacter = lines[line].indexOf('//');
+		if (startCharacter >= 0) {
+			matches.push({
+				text: lines[line].slice(startCharacter),
+				line,
+				startCharacter,
+				endCharacter: lines[line].length
+			});
+		}
+	}
+
+	return matches;
+}
+
+export function findParentheticalText(text: string): CommentTextMatch[] {
+	const matches: CommentTextMatch[] = [];
+	const lines = text.split(/\r?\n/);
+
+	for (let line = 0; line < lines.length; line++) {
+		const stack: Array<{ startCharacter: number; close: string }> = [];
+		const value = lines[line];
+
+		for (let character = 0; character < value.length; character++) {
+			const current = value[character];
+			if (current === '(' || current === '（') {
+				stack.push({
+					startCharacter: character,
+					close: current === '(' ? ')' : '）'
+				});
+				continue;
+			}
+
+			let openIndex = -1;
+			for (let stackIndex = stack.length - 1; stackIndex >= 0; stackIndex--) {
+				if (stack[stackIndex].close === current) {
+					openIndex = stackIndex;
+					break;
+				}
+			}
+			if (openIndex >= 0) {
+				const open = stack[openIndex];
+				stack.splice(openIndex);
+				matches.push({
+					text: value.slice(open.startCharacter, character + 1),
+					line,
+					startCharacter: open.startCharacter,
+					endCharacter: character + 1
+				});
+			}
 		}
 	}
 
@@ -284,7 +396,7 @@ function stripJsonFence(content: string) {
 }
 
 function readString(value: unknown) {
-	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+	return typeof value === 'string' && value.trim().length > 0 ? normalizeAsciiPunctuation(value.trim()) : undefined;
 }
 
 function readDiagnosticKind(value: unknown): EnlearnDiagnosticKind | undefined {

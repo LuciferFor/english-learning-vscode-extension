@@ -1,3 +1,5 @@
+import { normalizeAsciiPunctuation } from './punctuation';
+
 export interface PredictionPosition {
 	line: number;
 	character: number;
@@ -89,5 +91,5 @@ function stripJsonFence(content: string) {
 }
 
 function readString(value: unknown) {
-	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+	return typeof value === 'string' && value.trim().length > 0 ? normalizeAsciiPunctuation(value.trim()) : undefined;
 }

@@ -1,3 +1,5 @@
+import { normalizeAsciiPunctuation } from './punctuation';
+
 export interface TextSelectionRange {
 	startLine: number;
 	startCharacter: number;
@@ -23,11 +25,11 @@ export function getLineAfterSelections(selections: TextSelectionRange[]) {
 }
 
 export function normalizeInsertedTranslation(value: string) {
-	return value
+	return normalizeAsciiPunctuation(value
 		.split(/\r?\n/)
 		.map(line => line.trimEnd())
 		.join('\n')
-		.trim();
+		.trim());
 }
 
 export function isSingleEnglishWord(value: string) {
@@ -35,7 +37,7 @@ export function isSingleEnglishWord(value: string) {
 }
 
 export function normalizeInlineTranslation(value: string) {
-	return value
+	return normalizeAsciiPunctuation(value
 		.replace(/^```json\s*/i, '')
 		.replace(/^```\s*/i, '')
 		.replace(/\s*```$/i, '')
@@ -43,7 +45,7 @@ export function normalizeInlineTranslation(value: string) {
 		.replace(/\s*[）)]$/, '')
 		.split(/\r?\n/)[0]
 		.replace(/[。.!?！？]+$/g, '')
-		.trim();
+		.trim());
 }
 
 export function formatInlineTranslation(value: string) {
@@ -90,19 +92,19 @@ export function collectSentenceContext(lines: TextLine[], selection: TextSelecti
 }
 
 export function normalizePsExplanation(value: string) {
-	return value
+	return normalizeAsciiPunctuation(value
 		.replace(/^```json\s*/i, '')
 		.replace(/^```\s*/i, '')
 		.replace(/\s*```$/i, '')
 		.replace(/^\s*[(（]?PS[:：]\s*/i, '')
 		.replace(/[)）]?\s*$/i, '')
 		.replace(/\s+/g, ' ')
-		.trim();
+		.trim());
 }
 
 export function formatPsExplanation(value: string) {
 	const normalized = normalizePsExplanation(value);
-	return normalized ? `（PS: ${normalized}）` : '';
+	return normalized ? `(PS: ${normalized})` : '';
 }
 
 function endsSentence(value: string) {

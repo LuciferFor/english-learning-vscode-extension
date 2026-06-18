@@ -1,3 +1,5 @@
+import { normalizeAsciiPunctuation } from './punctuation';
+
 export interface RelatedWord {
 	word: string;
 	meaning: string;
@@ -87,9 +89,9 @@ export function formatRelatedWordBlock(item: RelatedWord) {
 		lines.push(`: example ${item.example}`);
 	}
 
-	const notes = [item.domain ? `相关领域：${item.domain}` : undefined, item.note].filter(Boolean);
+	const notes = [item.domain ? `相关领域: ${item.domain}` : undefined, item.note].filter(Boolean);
 	if (notes.length > 0) {
-		lines.push(`: note ${notes.join('；')}`);
+		lines.push(`: note ${notes.join('; ')}`);
 	}
 
 	return `${lines.join('\n')}\n`;
@@ -104,5 +106,5 @@ function stripJsonFence(content: string) {
 }
 
 function readString(value: unknown) {
-	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+	return typeof value === 'string' && value.trim().length > 0 ? normalizeAsciiPunctuation(value.trim()) : undefined;
 }
