@@ -24,6 +24,13 @@ export interface EnglishWordMatch {
 	endCharacter: number;
 }
 
+export interface ChineseTextMatch {
+	text: string;
+	line: number;
+	startCharacter: number;
+	endCharacter: number;
+}
+
 export interface EnlearnCheckableSegment {
 	id: string;
 	text: string;
@@ -32,6 +39,7 @@ export interface EnlearnCheckableSegment {
 }
 
 const ENGLISH_WORD_PATTERN = /\b[A-Za-z]+(?:[-'][A-Za-z]+)*\b/g;
+const CHINESE_TEXT_PATTERN = /[\u3400-\u9fff]+(?:[，。！？、；：“”‘’（）《》\u3400-\u9fff]*)/gu;
 const ALLOWED_VOCABULARY_FIELDS = new Set(['meaning', 'phonetic', 'example', 'note']);
 const BLOCKED_AI_LINE_PATTERN = /^\s*(?:=|@|\[word\]|\/\/|#)/;
 const CHECKABLE_PREFIX_PATTERNS = [
@@ -47,6 +55,27 @@ export function findEnglishWords(text: string): EnglishWordMatch[] {
 
 	for (let line = 0; line < lines.length; line++) {
 		const pattern = new RegExp(ENGLISH_WORD_PATTERN);
+		let match: RegExpExecArray | null;
+
+		while ((match = pattern.exec(lines[line])) !== null) {
+			matches.push({
+				text: match[0],
+				line,
+				startCharacter: match.index,
+				endCharacter: match.index + match[0].length
+			});
+		}
+	}
+
+	return matches;
+}
+
+export function findChineseText(text: string): ChineseTextMatch[] {
+	const matches: ChineseTextMatch[] = [];
+	const lines = text.split(/\r?\n/);
+
+	for (let line = 0; line < lines.length; line++) {
+		const pattern = new RegExp(CHINESE_TEXT_PATTERN);
 		let match: RegExpExecArray | null;
 
 		while ((match = pattern.exec(lines[line])) !== null) {

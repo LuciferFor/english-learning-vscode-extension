@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import {
 	extractCheckableEnglishSegments,
+	findChineseText,
 	findEnglishWords,
 	hashText,
 	parseAiValidationIssues,
@@ -22,10 +23,17 @@ import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
 import {
 	DEFAULT_TTS_SETTINGS,
 	buildPowerShellMediaPlayerScript,
+	createTtsCacheKey,
 	normalizeTtsText,
 	toTtsValidationMessage,
 	validateTtsText
 } from '../tts';
+import {
+	collectSentenceContext,
+	formatPsExplanation,
+	getLineAfterSelections,
+	normalizeInsertedTranslation
+} from '../textInsertion';
 
 suite('English Learning Plugin extension', () => {
 	test('registers .enlearn language', async () => {
@@ -76,20 +84,27 @@ suite('English Learning Plugin extension', () => {
 		}
 	});
 
-	test('contributes sidebar view and related words menu command', () => {
+	test('contributes sidebar view without cramped title buttons', () => {
 		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
 		assert.ok(extension);
 
 		const contributes = extension.packageJSON.contributes;
 		assert.ok(contributes.viewsContainers.activitybar.some((item: { id: string }) => item.id === 'englishLearning'));
 		assert.ok(contributes.views.englishLearning.some((item: { id: string }) => item.id === 'englishLearning.actionsView'));
-		assert.ok(contributes.menus['view/title'].some((item: { command: string }) => item.command === 'englishLearning.generateRelatedWords'));
-		assert.ok(contributes.menus['view/title'].some((item: { command: string }) => item.command === 'englishLearning.playSelectionAudio'));
+		assert.strictEqual(contributes.menus['view/title'], undefined);
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.generateRelatedWords'));
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.playSelectionAudio'));
 	});
 
-	test('sidebar actions show shortcuts in labels', () => {
+	test('sidebar actions use Chinese labels and keep shortcuts visible', () => {
+		assert.deepStrictEqual(ENGLISH_LEARNING_ACTIONS.map(action => action.label), [
+			'解释选中文本',
+			'中英互译',
+			'总结学习内容',
+			'插入学习块',
+			'生成相关词',
+			'播放发音'
+		]);
 		assert.deepStrictEqual(ENGLISH_LEARNING_ACTIONS.map(action => action.shortcut), [
 			'Ctrl+Alt+Q',
 			'Ctrl+Alt+W',
@@ -100,7 +115,8 @@ suite('English Learning Plugin extension', () => {
 		]);
 
 		for (const action of ENGLISH_LEARNING_ACTIONS) {
-			assert.ok(action.label.includes(action.shortcut));
+			assert.ok(action.label.length <= 8);
+			assert.ok(action.shortcut.startsWith('Ctrl+Alt+'));
 		}
 	});
 
@@ -115,6 +131,9 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(properties['englishLearning.validation.debounceMs']);
 		assert.ok(properties['englishLearning.highlight.englishWords.enabled']);
 		assert.ok(properties['englishLearning.highlight.englishWords.color']);
+		assert.ok(properties['englishLearning.highlight.chineseText.enabled']);
+		assert.ok(properties['englishLearning.highlight.chineseText.color']);
+		assert.strictEqual((properties['englishLearning.highlight.chineseText.color'] as { default: string }).default, '#F2994A');
 		assert.ok(properties['englishLearning.prediction.enabled']);
 		assert.ok(properties['englishLearning.prediction.showTranslationHover']);
 		assert.ok(properties['englishLearning.prediction.maxContextChars']);
@@ -136,6 +155,18 @@ suite('English Learning Plugin extension', () => {
 		assert.deepStrictEqual(words, ['English', 'words', "don't", 'miss', 'reading-speed']);
 	});
 
+	test('matches Chinese text for orange highlighting', () => {
+		const matches = findChineseText([
+			'我想要学习英语',
+			'I need to improve my speaking.',
+			'= 我需要去改进我的口语。'
+		].join('\n'));
+
+		assert.deepStrictEqual(matches.map(match => match.text), ['我想要学习英语', '我需要去改进我的口语。']);
+		assert.strictEqual(matches[0].line, 0);
+		assert.strictEqual(matches[1].line, 2);
+	});
+
 	test('validates local .enlearn format issues', () => {
 		const issues = validateEnlearnFormatText([
 			'@ bad',
@@ -148,6 +179,58 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(issues.some(issue => issue.message.includes('[word]')));
 		assert.ok(issues.some(issue => issue.message.includes('未知词条字段')));
 		assert.ok(issues.some(issue => issue.message.includes('cloze')));
+	});
+
+	test('calculates next-line translation insertion point', () => {
+		assert.strictEqual(getLineAfterSelections([{
+			startLine: 1,
+			startCharacter: 2,
+			endLine: 1,
+			endCharacter: 10
+		}]), 2);
+		assert.strictEqual(getLineAfterSelections([{
+			startLine: 1,
+			startCharacter: 0,
+			endLine: 2,
+			endCharacter: 0
+		}]), 2);
+		assert.strictEqual(normalizeInsertedTranslation('\n我想学习英语。\n'), '我想学习英语。');
+	});
+
+	test('collects sentence context and formats inline PS explanations', () => {
+		const context = collectSentenceContext([
+			{ lineNumber: 0, text: 'I want an apple.' },
+			{ lineNumber: 1, text: 'Next sentence.' }
+		], {
+			startLine: 0,
+			startCharacter: 7,
+			endLine: 0,
+			endCharacter: 9
+		});
+
+		assert.strictEqual(context.text, 'I want an apple.');
+		assert.strictEqual(context.endLine, 0);
+		const multiline = collectSentenceContext([
+			{ lineNumber: 0, text: '> I want' },
+			{ lineNumber: 1, text: '> an apple.' },
+			{ lineNumber: 2, text: '= 我想要一个苹果。' }
+		], {
+			startLine: 1,
+			startCharacter: 2,
+			endLine: 1,
+			endCharacter: 4
+		});
+
+		assert.strictEqual(multiline.text, '> I want\n> an apple.');
+		assert.strictEqual(multiline.endLine, 1);
+		assert.strictEqual(
+			formatPsExplanation('PS: an 用在 apple 前，因为 apple 以元音音素开头。'),
+			'（PS: an 用在 apple 前，因为 apple 以元音音素开头。）'
+		);
+		assert.strictEqual(
+			formatPsExplanation('（PS: an 是不定冠词，用于 apple 前。）'),
+			'（PS: an 是不定冠词，用于 apple 前。）'
+		);
 	});
 
 	test('extracts changed English segments for incremental AI validation', () => {
@@ -222,6 +305,15 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual(validateTtsText('你好', 10), 'noEnglish');
 		assert.strictEqual(validateTtsText('Hello', 10), undefined);
 		assert.ok(toTtsValidationMessage('tooLong', 10).includes('10'));
+	});
+
+	test('creates stable TTS cache keys', () => {
+		const first = createTtsCacheKey('Hello.', DEFAULT_TTS_SETTINGS);
+		const second = createTtsCacheKey('Hello.', DEFAULT_TTS_SETTINGS);
+		const changed = createTtsCacheKey('Hello again.', DEFAULT_TTS_SETTINGS);
+
+		assert.strictEqual(first, second);
+		assert.notStrictEqual(first, changed);
 	});
 
 	test('builds PowerShell MediaPlayer script safely', () => {

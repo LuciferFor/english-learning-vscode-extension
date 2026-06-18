@@ -45,6 +45,25 @@ export function validateTtsText(text: string, maxTextLength: number): TtsValidat
 	return undefined;
 }
 
+export function createTtsCacheKey(text: string, settings: TtsSettings) {
+	const source = [
+		text,
+		settings.voice,
+		settings.lang,
+		settings.rate,
+		settings.pitch,
+		settings.volume
+	].join('\n');
+	let hash = 2166136261;
+
+	for (let index = 0; index < source.length; index++) {
+		hash ^= source.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+
+	return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 export function toTtsValidationMessage(error: TtsValidationError, maxTextLength: number) {
 	return {
 		empty: 'Select an English word or sentence before playing pronunciation.',

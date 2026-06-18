@@ -1,13 +1,31 @@
 {
   "name": "english-learning-plugin",
-  "displayName": "English Learning Plugin",
-  "description": "AI-powered English learning tools for VS Code.",
+  "displayName": "英语学习插件",
+  "description": "面向 VS Code 的 AI 英语学习工具。",
   "version": "0.0.1",
+  "publisher": "luciferfor",
+  "icon": "resources/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LuciferFor/----VS--.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LuciferFor/----VS--/issues"
+  },
+  "homepage": "https://github.com/LuciferFor/----VS--#readme",
   "engines": {
     "vscode": "^1.125.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "english",
+    "learning",
+    "enlearn",
+    "translation",
+    "pronunciation"
   ],
   "activationEvents": [
     "onCommand:englishLearning.translateSelection",
@@ -27,48 +45,48 @@
     "commands": [
       {
         "command": "englishLearning.translateSelection",
-        "title": "Translate Selection (Ctrl+Alt+W)",
-        "category": "English Learning Plugin"
+        "title": "中英互译选中文本 (Ctrl+Alt+W)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.explainSelection",
-        "title": "Explain Selection (Ctrl+Alt+Q)",
-        "category": "English Learning Plugin"
+        "title": "解释选中文本 (Ctrl+Alt+Q)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.annotateSelection",
-        "title": "Annotate Selection",
-        "category": "English Learning Plugin"
+        "title": "生成学习注解",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.insertEnlearnBlock",
-        "title": "Insert .enlearn Learning Block (Ctrl+Alt+A)",
-        "category": "English Learning Plugin"
+        "title": "插入 .enlearn 学习块 (Ctrl+Alt+A)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.summarizeLearningContent",
-        "title": "Summarize Learning Content (Ctrl+Alt+E)",
-        "category": "English Learning Plugin"
+        "title": "总结学习内容 (Ctrl+Alt+E)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.generateRelatedWords",
-        "title": "Generate Related Words (Ctrl+Alt+S)",
-        "category": "English Learning Plugin"
+        "title": "生成相关词 (Ctrl+Alt+S)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.playSelectionAudio",
-        "title": "Play Pronunciation (Ctrl+Alt+D)",
-        "category": "English Learning Plugin"
+        "title": "播放发音 (Ctrl+Alt+D)",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.insertRelatedWord",
-        "title": "Insert Related Word",
-        "category": "English Learning Plugin"
+        "title": "插入相关词",
+        "category": "英语学习插件"
       },
       {
         "command": "englishLearning.setApiKey",
-        "title": "Set DeepSeek API Key",
-        "category": "English Learning Plugin"
+        "title": "设置 DeepSeek API Key",
+        "category": "英语学习插件"
       }
     ],
     "keybindings": [
@@ -135,25 +153,13 @@
           "when": "editorHasSelection && editorLangId == enlearn",
           "group": "englishLearning@6"
         }
-      ],
-      "view/title": [
-        {
-          "command": "englishLearning.generateRelatedWords",
-          "when": "view == englishLearning.actionsView",
-          "group": "navigation@1"
-        },
-        {
-          "command": "englishLearning.playSelectionAudio",
-          "when": "view == englishLearning.actionsView",
-          "group": "navigation@2"
-        }
       ]
     },
     "viewsContainers": {
       "activitybar": [
         {
           "id": "englishLearning",
-          "title": "English Learning Plugin",
+          "title": "英语学习",
           "icon": "./resources/english-learning.svg"
         }
       ]
@@ -162,12 +168,12 @@
       "englishLearning": [
         {
           "id": "englishLearning.actionsView",
-          "name": "English Learning Actions"
+          "name": "快捷操作"
         }
       ]
     },
     "configuration": {
-      "title": "English Learning Plugin",
+      "title": "英语学习插件",
       "properties": {
         "englishLearning.deepseek.baseUrl": {
           "type": "string",
@@ -177,7 +183,7 @@
         "englishLearning.deepseek.model": {
           "type": "string",
           "default": "deepseek-v4-flash",
-          "description": "DeepSeek model used for translation, explanation, and .enlearn block generation."
+          "description": "DeepSeek model used for AI learning features. Defaults to the fast non-reasoning model deepseek-v4-flash."
         },
         "englishLearning.deepseek.temperature": {
           "type": "number",
@@ -212,6 +218,16 @@
           "type": "string",
           "default": "#2F80ED",
           "description": "Decoration color for English words in .enlearn files."
+        },
+        "englishLearning.highlight.chineseText.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight Chinese text in .enlearn files with a fixed decoration color."
+        },
+        "englishLearning.highlight.chineseText.color": {
+          "type": "string",
+          "default": "#F2994A",
+          "description": "Decoration color for Chinese text in .enlearn files."
         },
         "englishLearning.prediction.enabled": {
           "type": "boolean",
@@ -283,6 +299,7 @@
         "id": "enlearn",
         "aliases": [
           "English Learning Plugin",
+          "英语学习插件",
           "enlearn"
         ],
         "extensions": [
@@ -324,7 +341,8 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "vsce:package": "vsce package"
   },
   "dependencies": {
     "node-edge-tts": "^1.2.10",
@@ -335,6 +353,7 @@
     "@types/node": "22.x",
     "@types/vscode": "^1.125.0",
     "@types/ws": "^8.18.1",
+    "@vscode/vsce": "^3.9.2",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.28.1",

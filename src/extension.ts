@@ -2,10 +2,12 @@ import { ChildProcess, spawn } from 'node:child_process';
 import OpenAI from 'openai';
 import { EdgeTTS } from 'node-edge-tts';
 import * as vscode from 'vscode';
+import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions';
 import {
 	EnlearnCheckableSegment,
 	EnlearnValidationIssue,
 	extractCheckableEnglishSegments,
+	findChineseText,
 	findEnglishWords,
 	parseAiValidationIssues,
 	validateEnlearnFormatText
@@ -32,10 +34,18 @@ import {
 	DEFAULT_TTS_SETTINGS,
 	TtsSettings,
 	buildPowerShellMediaPlayerScript,
+	createTtsCacheKey,
 	normalizeTtsText,
 	toTtsValidationMessage,
 	validateTtsText
 } from './tts';
+import {
+	TextSelectionRange,
+	collectSentenceContext,
+	formatPsExplanation,
+	getLineAfterSelections,
+	normalizeInsertedTranslation
+} from './textInsertion';
 
 const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
@@ -43,6 +53,7 @@ const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
 
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
+type DeepSeekRequestMode = LearningMode | 'contextExplain';
 type LearningDirection = 'en-to-zh' | 'zh-to-en' | 'mixed';
 
 interface SelectedText {
@@ -112,6 +123,7 @@ interface RelatedWordTarget {
 let outputChannel: vscode.OutputChannel;
 let enlearnDiagnosticCollection: vscode.DiagnosticCollection;
 let englishWordDecorationType: vscode.TextEditorDecorationType | undefined;
+let chineseTextDecorationType: vscode.TextEditorDecorationType | undefined;
 let missingValidationApiKeyNoticeShown = false;
 const validationTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const validationSegmentSnapshots = new Map<string, Set<string>>();
@@ -120,6 +132,15 @@ const aiValidationCaches = new Map<string, Map<string, AiValidationCacheEntry>>(
 let latestPrediction: PredictionCacheEntry | undefined;
 const predictionCache = new Map<string, PredictionCacheEntry>();
 let activeAudioPlayback: ChildProcess | undefined;
+
+function withDeepSeekNonThinking(params: ChatCompletionCreateParamsNonStreaming) {
+	return {
+		...params,
+		thinking: {
+			type: 'disabled'
+		}
+	} as ChatCompletionCreateParamsNonStreaming;
+}
 
 export function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel('English Learning Plugin');
@@ -186,8 +207,8 @@ export function activate(context: vscode.ExtensionContext) {
 			enlearnDiagnosticCollection.delete(document.uri);
 		}),
 		vscode.workspace.onDidChangeConfiguration(event => {
-			if (event.affectsConfiguration('englishLearning.highlight.englishWords')) {
-				refreshEnglishWordDecoration();
+			if (event.affectsConfiguration('englishLearning.highlight')) {
+				refreshTextDecorations();
 				updateAllVisibleEnglishWordHighlights();
 			}
 
@@ -212,6 +233,7 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 				validationTimers.clear();
 				englishWordDecorationType?.dispose();
+				chineseTextDecorationType?.dispose();
 				predictionCache.clear();
 				latestPrediction = undefined;
 				stopActiveAudioPlayback();
@@ -219,7 +241,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	refreshEnglishWordDecoration();
+	refreshTextDecorations();
 	updateAllVisibleEnglishWordHighlights();
 	for (const document of vscode.workspace.textDocuments) {
 		if (isEnlearnDocument(document)) {
@@ -272,8 +294,8 @@ class EnglishLearningTreeItem extends vscode.TreeItem {
 function createActionTreeItem(action: EnglishLearningAction) {
 	const item = new EnglishLearningTreeItem(action.label, vscode.TreeItemCollapsibleState.None);
 	item.id = `action.${action.id}`;
-	item.description = action.requiresSelection ? 'Selection required' : 'Selection or current file';
-	item.tooltip = `${action.label}\nShortcut: ${action.shortcut}`;
+	item.description = `${action.shortcut} · ${action.requiresSelection ? '需选中' : '可直接用'}`;
+	item.tooltip = `${action.label}\n快捷键：${action.shortcut}\n${action.requiresSelection ? '需要先选中文本。' : '可对选中文本或当前内容执行。'}`;
 	item.iconPath = new vscode.ThemeIcon('zap');
 	item.command = {
 		command: action.command,
@@ -284,13 +306,13 @@ function createActionTreeItem(action: EnglishLearningAction) {
 
 function createRelatedWordsRootItem(result: RelatedWordsResult) {
 	const item = new EnglishLearningTreeItem(
-		`Related Words: ${result.source}`,
+		`相关词：${result.source}`,
 		vscode.TreeItemCollapsibleState.Expanded,
 		result.words.map(createRelatedWordTreeItem)
 	);
 	item.id = `related.${result.source}`;
-	item.description = `${result.words.length} words`;
-	item.tooltip = 'Click a related word to insert it into the active .enlearn editor.';
+	item.description = `${result.words.length} 个`;
+	item.tooltip = '点击相关词可插入到当前 .enlearn 编辑器。';
 	item.iconPath = new vscode.ThemeIcon('symbol-keyword');
 	return item;
 }
@@ -299,13 +321,13 @@ function createRelatedWordTreeItem(word: RelatedWord) {
 	const item = new EnglishLearningTreeItem(`${word.word} - ${word.meaning}`, vscode.TreeItemCollapsibleState.None);
 	item.id = `related.${word.word}.${word.meaning}`;
 	item.description = word.domain;
-	item.tooltip = [word.domain ? `Domain: ${word.domain}` : undefined, word.example ? `Example: ${word.example}` : undefined, word.note ? `Note: ${word.note}` : undefined]
+	item.tooltip = [word.domain ? `领域：${word.domain}` : undefined, word.example ? `例句：${word.example}` : undefined, word.note ? `备注：${word.note}` : undefined]
 		.filter(Boolean)
 		.join('\n');
 	item.iconPath = new vscode.ThemeIcon('symbol-string');
 	item.command = {
 		command: 'englishLearning.insertRelatedWord',
-		title: 'Insert Related Word',
+		title: '插入相关词',
 		arguments: [word]
 	};
 	return item;
@@ -407,7 +429,7 @@ async function requestDeepSeekPrediction(
 		baseURL: options.baseUrl
 	});
 
-	const completion = await client.chat.completions.create({
+	const completion = await client.chat.completions.create(withDeepSeekNonThinking({
 		model: options.model,
 		temperature: 0.4,
 		response_format: { type: 'json_object' },
@@ -439,7 +461,7 @@ Context before cursor:
 ${contextText}`
 			}
 		]
-	});
+	}));
 
 	const content = completion.choices[0]?.message?.content;
 	return content ? parsePredictionResult(content) : undefined;
@@ -483,13 +505,21 @@ function isEnlearnDocument(document: vscode.TextDocument) {
 	return document.languageId === ENLEARN_LANGUAGE_ID;
 }
 
-function refreshEnglishWordDecoration() {
+function refreshTextDecorations() {
 	englishWordDecorationType?.dispose();
+	chineseTextDecorationType?.dispose();
 
-	const config = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords');
-	const color = config.get<string>('color')?.trim() || '#2F80ED';
+	const englishConfig = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords');
+	const englishColor = englishConfig.get<string>('color')?.trim() || '#2F80ED';
 	englishWordDecorationType = vscode.window.createTextEditorDecorationType({
-		color,
+		color: englishColor,
+		fontWeight: '600'
+	});
+
+	const chineseConfig = vscode.workspace.getConfiguration('englishLearning.highlight.chineseText');
+	const chineseColor = chineseConfig.get<string>('color')?.trim() || '#F2994A';
+	chineseTextDecorationType = vscode.window.createTextEditorDecorationType({
+		color: chineseColor,
 		fontWeight: '600'
 	});
 }
@@ -509,23 +539,33 @@ function updateEnglishWordHighlightsForDocument(document: vscode.TextDocument) {
 }
 
 function updateEnglishWordHighlights(editor: vscode.TextEditor | undefined) {
-	if (!editor || !englishWordDecorationType) {
+	if (!editor || !englishWordDecorationType || !chineseTextDecorationType) {
 		return;
 	}
 
-	const enabled = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords').get<boolean>('enabled', true);
-	if (!enabled || !isEnlearnDocument(editor.document)) {
+	const englishEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.englishWords').get<boolean>('enabled', true);
+	const chineseEnabled = vscode.workspace.getConfiguration('englishLearning.highlight.chineseText').get<boolean>('enabled', true);
+	if (!isEnlearnDocument(editor.document)) {
 		editor.setDecorations(englishWordDecorationType, []);
+		editor.setDecorations(chineseTextDecorationType, []);
 		return;
 	}
 
-	const ranges = findEnglishWords(editor.document.getText()).map(match => new vscode.Range(
+	const text = editor.document.getText();
+	const englishRanges = englishEnabled ? findEnglishWords(text).map(match => new vscode.Range(
 		match.line,
 		match.startCharacter,
 		match.line,
 		match.endCharacter
-	));
-	editor.setDecorations(englishWordDecorationType, ranges);
+	)) : [];
+	const chineseRanges = chineseEnabled ? findChineseText(text).map(match => new vscode.Range(
+		match.line,
+		match.startCharacter,
+		match.line,
+		match.endCharacter
+	)) : [];
+	editor.setDecorations(englishWordDecorationType, englishRanges);
+	editor.setDecorations(chineseTextDecorationType, chineseRanges);
 }
 
 function scheduleEnlearnValidation(context: vscode.ExtensionContext, document: vscode.TextDocument) {
@@ -770,7 +810,7 @@ async function requestDeepSeekValidationIssues(apiKey: string, segments: Enlearn
 		baseURL: options.baseUrl
 	});
 
-	const completion = await client.chat.completions.create({
+	const completion = await client.chat.completions.create(withDeepSeekNonThinking({
 		model: options.model,
 		temperature: 0,
 		response_format: { type: 'json_object' },
@@ -808,7 +848,7 @@ ${JSON.stringify(segments.map(segment => ({
 })), null, 2)}`
 			}
 		]
-	});
+	}));
 
 	const content = completion.choices[0]?.message?.content;
 	return content ? assignMissingSegmentIds(parseAiValidationIssues(content), segments) : [];
@@ -905,7 +945,12 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(apiKey, mode, selected.text);
+			const contextExplanation = mode === 'explain' ? getSelectionSentenceContext(selected.editor) : undefined;
+			const response = await requestDeepSeek(
+				apiKey,
+				mode === 'explain' ? 'contextExplain' : mode,
+				contextExplanation ? buildContextExplainInput(selected.text, contextExplanation.text) : selected.text
+			);
 			const content = mode === 'annotate'
 				? toEnlearnBlock(selected.text, response.result, response.options.model)
 				: toMarkdown(mode, selected.text, response.result, response.options.model);
@@ -923,6 +968,18 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 				model: response.options.model
 			});
 
+			if (mode === 'translate') {
+				await insertTranslationBelowSelection(selected.editor, response.result.translation);
+				return;
+			}
+
+			if (mode === 'explain') {
+				if (contextExplanation) {
+					await insertPsExplanationAfterSentence(selected.editor, contextExplanation.endLine, response.result.explanation ?? response.result.summary);
+				}
+				return;
+			}
+
 			if (mode === 'annotate') {
 				await showEnlearnDocument(content);
 			} else {
@@ -931,6 +988,69 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 		} catch (error) {
 			handleCommandError(error);
 		}
+	});
+}
+
+function getSelectionSentenceContext(editor: vscode.TextEditor) {
+	const selection = editor.selection;
+	const range: TextSelectionRange = {
+		startLine: selection.start.line,
+		startCharacter: selection.start.character,
+		endLine: selection.end.line,
+		endCharacter: selection.end.character
+	};
+	const lines = Array.from({ length: editor.document.lineCount }, (_, lineNumber) => ({
+		lineNumber,
+		text: editor.document.lineAt(lineNumber).text
+	}));
+
+	return collectSentenceContext(lines, range);
+}
+
+function buildContextExplainInput(selectedText: string, sentenceContext: string) {
+	return [
+		`Selected text: ${selectedText}`,
+		'',
+		'Sentence context:',
+		sentenceContext
+	].join('\n');
+}
+
+async function insertPsExplanationAfterSentence(editor: vscode.TextEditor, sentenceEndLine: number, explanation: string | undefined) {
+	const value = formatPsExplanation(explanation ?? '');
+	if (!value) {
+		vscode.window.showWarningMessage('DeepSeek did not return a usable explanation.');
+		return;
+	}
+
+	const safeLine = Math.min(sentenceEndLine, editor.document.lineCount - 1);
+	const line = editor.document.lineAt(safeLine);
+	await editor.edit(editBuilder => {
+		editBuilder.insert(line.range.end, value);
+	});
+}
+
+async function insertTranslationBelowSelection(editor: vscode.TextEditor, translation: string | undefined) {
+	const value = normalizeInsertedTranslation(translation ?? '');
+	if (!value) {
+		vscode.window.showWarningMessage('DeepSeek did not return translation text.');
+		return;
+	}
+
+	const insertLine = getLineAfterSelections(editor.selections.map(selection => ({
+		startLine: selection.start.line,
+		startCharacter: selection.start.character,
+		endLine: selection.end.line,
+		endCharacter: selection.end.character
+	})));
+	await editor.edit(editBuilder => {
+		if (insertLine >= editor.document.lineCount) {
+			const lastLine = editor.document.lineAt(editor.document.lineCount - 1);
+			editBuilder.insert(lastLine.range.end, `\n${value}`);
+			return;
+		}
+
+		editBuilder.insert(new vscode.Position(insertLine, 0), `${value}\n`);
 	});
 }
 
@@ -1178,9 +1298,13 @@ function getTtsSettings(): TtsSettings {
 }
 
 async function generateTtsAudio(context: vscode.ExtensionContext, text: string, settings: TtsSettings) {
-	const speechDirectory = vscode.Uri.joinPath(context.globalStorageUri, 'speech');
+	const speechDirectory = vscode.Uri.joinPath(context.globalStorageUri, 'speech', 'cache');
 	await vscode.workspace.fs.createDirectory(speechDirectory);
-	const audioUri = vscode.Uri.joinPath(speechDirectory, 'latest.mp3');
+	const audioUri = vscode.Uri.joinPath(speechDirectory, `${createTtsCacheKey(text, settings)}.mp3`);
+	if (await fileExists(audioUri)) {
+		return audioUri.fsPath;
+	}
+
 	const tts = new EdgeTTS({
 		voice: settings.voice,
 		lang: settings.lang,
@@ -1193,6 +1317,15 @@ async function generateTtsAudio(context: vscode.ExtensionContext, text: string, 
 
 	await tts.ttsPromise(text, audioUri.fsPath);
 	return audioUri.fsPath;
+}
+
+async function fileExists(uri: vscode.Uri) {
+	try {
+		const stat = await vscode.workspace.fs.stat(uri);
+		return stat.type === vscode.FileType.File && stat.size > 0;
+	} catch {
+		return false;
+	}
 }
 
 function playAudioFile(audioPath: string) {
@@ -1251,7 +1384,7 @@ async function requestDeepSeekRelatedWords(apiKey: string, word: string): Promis
 
 	let content: string | null | undefined;
 	try {
-		const completion = await client.chat.completions.create({
+		const completion = await client.chat.completions.create(withDeepSeekNonThinking({
 			model: options.model,
 			temperature: 0.3,
 			response_format: { type: 'json_object' },
@@ -1291,7 +1424,7 @@ Source word:
 ${word}`
 				}
 			]
-		});
+		}));
 
 		content = completion.choices[0]?.message?.content;
 	} catch (error) {
@@ -1401,7 +1534,7 @@ function getSelectedTextOrCurrentDocument(): SelectedText | undefined {
 	};
 }
 
-async function requestDeepSeek(apiKey: string, mode: LearningMode, text: string) {
+async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: string) {
 	const options = getDeepSeekOptions();
 	const client = new OpenAI({
 		apiKey,
@@ -1411,7 +1544,7 @@ async function requestDeepSeek(apiKey: string, mode: LearningMode, text: string)
 	let content: string | null | undefined;
 
 	try {
-		const completion = await client.chat.completions.create({
+		const completion = await client.chat.completions.create(withDeepSeekNonThinking({
 			model: options.model,
 			temperature: options.temperature,
 			response_format: { type: 'json_object' },
@@ -1425,7 +1558,7 @@ async function requestDeepSeek(apiKey: string, mode: LearningMode, text: string)
 					content: buildDeepSeekPrompt(mode, text)
 				}
 			]
-		});
+		}));
 
 		content = completion.choices[0]?.message?.content;
 	} catch (error) {
@@ -1452,7 +1585,25 @@ function getDeepSeekOptions(): DeepSeekOptions {
 	};
 }
 
-function buildDeepSeekPrompt(mode: LearningMode, text: string) {
+function buildDeepSeekPrompt(mode: DeepSeekRequestMode, text: string) {
+	if (mode === 'contextExplain') {
+		return `Explain the selected text based on its sentence context.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "explanation": "一句中文 PS 解释"
+}
+
+Rules:
+- 只解释 selected text 在 sentence context 里的作用。
+- 说明含义、语法功能、搭配或为什么用这个形式。
+- 如果是冠词 a/an/the，要解释为什么用它以及为什么不是其它冠词。
+- 不要翻译整句，不要输出列表，不要输出 Markdown。
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+${text}`;
+	}
+
 	const commonSchema = `Return valid json only, without markdown fences. Use this JSON shape:
 {
   "translation": "translation text",
@@ -1479,7 +1630,8 @@ function buildDeepSeekPrompt(mode: LearningMode, text: string) {
 		explain: 'Explain the selected English or Chinese-English learning text. Focus on grammar, vocabulary, collocations, and natural usage.',
 		annotate: 'Create a study annotation for the selected text. Include translation, explanation, vocabulary, examples, and practice prompts.',
 		enlearn: 'Create content suitable for an .enlearn study block from the selected text. Include translation, explanation, vocabulary, examples, and practice prompts.',
-		summarize: 'Summarize this .enlearn learning content. Focus on core topics, key vocabulary, grammar and expressions, weak points, and concrete review suggestions.'
+		summarize: 'Summarize this .enlearn learning content. Focus on core topics, key vocabulary, grammar and expressions, weak points, and concrete review suggestions.',
+		contextExplain: 'Explain the selected text only by using its sentence context. Focus on the selected text role, meaning, grammar reason, and why this form is used here. Return one concise Chinese explanation suitable for inline PS annotation.'
 	}[mode];
 
 	return `${task}
