@@ -70,6 +70,8 @@ interface SelectedText {
 	editor: vscode.TextEditor;
 	text: string;
 	sourceUri: string;
+	selections: TextSelectionRange[];
+	primarySelection: TextSelectionRange;
 }
 
 interface DeepSeekOptions {
@@ -179,12 +181,14 @@ interface PracticeOrGradeTarget {
 	editor: vscode.TextEditor;
 	documentText: string;
 	selectedText: string;
+	selections: TextSelectionRange[];
 }
 
 interface AnswerQuestionTarget {
 	editor: vscode.TextEditor;
 	questionText: string;
 	promptText: string;
+	selections: TextSelectionRange[];
 }
 
 let outputChannel: vscode.OutputChannel;
@@ -1328,8 +1332,10 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 		cancellable: false
 	}, async () => {
 		try {
-			const contextExplanation = mode === 'explain' ? getSelectionSentenceContext(selected.editor) : undefined;
-			const inlineTranslation = mode === 'translate' ? getInlineTranslationTarget(selected.editor) : undefined;
+			const contextExplanation = mode === 'explain' ? getSelectionSentenceContext(selected.editor, selected.primarySelection) : undefined;
+			const inlineTranslation = mode === 'translate' && selected.selections.length === 1
+				? getInlineTranslationTarget(selected.editor, selected.primarySelection)
+				: undefined;
 			const response = await requestDeepSeek(
 				apiKey,
 				mode === 'explain' ? 'contextExplain' : inlineTranslation ? 'contextTranslate' : mode,
@@ -1360,7 +1366,7 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 				if (inlineTranslation) {
 					await insertInlineTranslation(selected.editor, inlineTranslation.insertPosition, response.result.translation);
 				} else {
-					await insertTranslationBelowSelection(selected.editor, response.result.translation);
+					await insertTranslationBelowSelection(selected.editor, response.result.translation, selected.selections);
 				}
 				return;
 			}
@@ -1383,14 +1389,7 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 	});
 }
 
-function getSelectionSentenceContext(editor: vscode.TextEditor) {
-	const selection = editor.selection;
-	const range: TextSelectionRange = {
-		startLine: selection.start.line,
-		startCharacter: selection.start.character,
-		endLine: selection.end.line,
-		endCharacter: selection.end.character
-	};
+function getSelectionSentenceContext(editor: vscode.TextEditor, range: TextSelectionRange) {
 	const lines = Array.from({ length: editor.document.lineCount }, (_, lineNumber) => ({
 		lineNumber,
 		text: editor.document.lineAt(lineNumber).text
@@ -1399,19 +1398,15 @@ function getSelectionSentenceContext(editor: vscode.TextEditor) {
 	return collectSentenceContext(lines, range);
 }
 
-function getInlineTranslationTarget(editor: vscode.TextEditor): InlineTranslationTarget | undefined {
-	if (editor.selections.length !== 1) {
-		return undefined;
-	}
-
-	const selection = editor.selection;
+function getInlineTranslationTarget(editor: vscode.TextEditor, selectionRange: TextSelectionRange): InlineTranslationTarget | undefined {
+	const selection = toVsCodeRange(selectionRange);
 	const rawText = editor.document.getText(selection);
 	const selectedWord = rawText.trim();
 	if (!isSingleEnglishWord(selectedWord)) {
 		return undefined;
 	}
 
-	const context = getSelectionSentenceContext(editor);
+	const context = getSelectionSentenceContext(editor, selectionRange);
 	if (!context.text) {
 		return undefined;
 	}
@@ -1553,6 +1548,13 @@ function toTextSelectionRange(selection: vscode.Selection): TextSelectionRange {
 	};
 }
 
+function toVsCodeRange(selection: TextSelectionRange) {
+	return new vscode.Range(
+		new vscode.Position(selection.startLine, selection.startCharacter),
+		new vscode.Position(selection.endLine, selection.endCharacter)
+	);
+}
+
 export function parsePracticeBatchItems(documentText: string, selections: TextSelectionRange[]): PracticeBatchItem[] {
 	const lines = documentText.split(/\r?\n/);
 	const drafts: Array<{
@@ -1648,19 +1650,14 @@ async function insertInlineTranslation(editor: vscode.TextEditor, position: vsco
 	});
 }
 
-async function insertTranslationBelowSelection(editor: vscode.TextEditor, translation: string | undefined) {
+async function insertTranslationBelowSelection(editor: vscode.TextEditor, translation: string | undefined, selections: TextSelectionRange[]) {
 	const value = normalizeInsertedTranslation(translation ?? '');
 	if (!value) {
 		vscode.window.showWarningMessage('DeepSeek did not return translation text.');
 		return;
 	}
 
-	const insertLine = getLineAfterSelections(editor.selections.map(selection => ({
-		startLine: selection.start.line,
-		startCharacter: selection.start.character,
-		endLine: selection.end.line,
-		endCharacter: selection.end.character
-	})));
+	const insertLine = getLineAfterSelections(selections);
 	await editor.edit(editBuilder => {
 		if (insertLine >= editor.document.lineCount) {
 			const lastLine = editor.document.lineAt(editor.document.lineCount - 1);
@@ -1672,18 +1669,13 @@ async function insertTranslationBelowSelection(editor: vscode.TextEditor, transl
 	});
 }
 
-async function insertTextBelowSelections(editor: vscode.TextEditor, text: string) {
+async function insertTextBelowSelections(editor: vscode.TextEditor, text: string, selections: TextSelectionRange[]) {
 	const value = text.trim();
 	if (!value) {
 		return;
 	}
 
-	const insertLine = getLineAfterSelections(editor.selections.map(selection => ({
-		startLine: selection.start.line,
-		startCharacter: selection.start.character,
-		endLine: selection.end.line,
-		endCharacter: selection.end.character
-	})));
+	const insertLine = getLineAfterSelections(selections);
 
 	await editor.edit(editBuilder => {
 		if (insertLine >= editor.document.lineCount) {
@@ -1798,7 +1790,7 @@ async function answerSelectedQuestion(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await insertTextBelowSelections(target.editor, answer);
+			await insertTextBelowSelections(target.editor, answer, target.selections);
 		} catch (error) {
 			handleCommandError(error);
 		}
@@ -1812,7 +1804,7 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 	}
 
 	const hasAnswer = target.selectedText.length > 0;
-	const batchItems = hasAnswer ? parsePracticeBatchItems(target.editor.document.getText(), target.editor.selections.map(toTextSelectionRange)) : [];
+	const batchItems = hasAnswer ? parsePracticeBatchItems(target.editor.document.getText(), target.selections) : [];
 
 	if (batchItems.length > 0) {
 		await gradePracticeBatch(context, target, batchItems);
@@ -1845,7 +1837,7 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				await insertTextBelowSelections(target.editor, feedback);
+				await insertTextBelowSelections(target.editor, feedback, target.selections);
 				return;
 			}
 
@@ -1941,7 +1933,7 @@ async function insertEnlearnBlock(context: vscode.ExtensionContext) {
 
 			if (selected.editor.document.languageId === 'enlearn') {
 				await selected.editor.edit(editBuilder => {
-					editBuilder.replace(selected.editor.selection, `${block}\n`);
+					editBuilder.replace(toVsCodeRange(selected.primarySelection), `${block}\n`);
 				});
 				return;
 			}
@@ -2307,9 +2299,9 @@ function getSelectedText(): SelectedText | undefined {
 		return undefined;
 	}
 
-	const text = editor.selections
-		.map(selection => editor.document.getText(selection))
-		.filter(value => value.trim().length > 0)
+	const selectedSnapshots = getNonEmptySelectionSnapshots(editor);
+	const text = selectedSnapshots
+		.map(selection => selection.text)
 		.join('\n')
 		.trim();
 
@@ -2321,6 +2313,8 @@ function getSelectedText(): SelectedText | undefined {
 	return {
 		editor,
 		text,
+		selections: selectedSnapshots.map(selection => selection.range),
+		primarySelection: selectedSnapshots[0].range,
 		sourceUri: editor.document.uri.toString()
 	};
 }
@@ -2332,9 +2326,9 @@ function getSelectedTextOrCurrentDocument(): SelectedText | undefined {
 		return undefined;
 	}
 
-	const selectedText = editor.selections
-		.map(selection => editor.document.getText(selection))
-		.filter(value => value.trim().length > 0)
+	const selectedSnapshots = getNonEmptySelectionSnapshots(editor);
+	const selectedText = selectedSnapshots
+		.map(selection => selection.text)
 		.join('\n')
 		.trim();
 	const text = selectedText || editor.document.getText().trim();
@@ -2347,6 +2341,8 @@ function getSelectedTextOrCurrentDocument(): SelectedText | undefined {
 	return {
 		editor,
 		text,
+		selections: selectedSnapshots.length > 0 ? selectedSnapshots.map(selection => selection.range) : editor.selections.map(toTextSelectionRange),
+		primarySelection: selectedSnapshots[0]?.range ?? toTextSelectionRange(editor.selection),
 		sourceUri: editor.document.uri.toString()
 	};
 }
@@ -2364,16 +2360,17 @@ function getPracticeOrGradeTarget(): PracticeOrGradeTarget | undefined {
 		return undefined;
 	}
 
-	const selectedText = editor.selections
-		.map(selection => editor.document.getText(selection))
-		.filter(value => value.trim().length > 0)
+	const selectedSnapshots = getNonEmptySelectionSnapshots(editor);
+	const selectedText = selectedSnapshots
+		.map(selection => selection.text)
 		.join('\n')
 		.trim();
 
 	return {
 		editor,
 		documentText,
-		selectedText
+		selectedText,
+		selections: selectedSnapshots.length > 0 ? selectedSnapshots.map(selection => selection.range) : editor.selections.map(toTextSelectionRange)
 	};
 }
 
@@ -2384,9 +2381,9 @@ function getAnswerQuestionTarget(): AnswerQuestionTarget | undefined {
 		return undefined;
 	}
 
-	const questionText = editor.selections
-		.map(selection => editor.document.getText(selection))
-		.filter(value => value.trim().length > 0)
+	const selectedSnapshots = getNonEmptySelectionSnapshots(editor);
+	const questionText = selectedSnapshots
+		.map(selection => selection.text)
 		.join('\n')
 		.trim();
 	if (!questionText) {
@@ -2397,7 +2394,7 @@ function getAnswerQuestionTarget(): AnswerQuestionTarget | undefined {
 	const promptText = buildAnswerQuestionInput(
 		editor.document.getText(),
 		questionText,
-		editor.selections.map(toTextSelectionRange)
+		selectedSnapshots.map(selection => selection.range)
 	);
 	if (!promptText) {
 		vscode.window.showWarningMessage('Selected question is too long. Shorten the selection and try again.');
@@ -2407,8 +2404,18 @@ function getAnswerQuestionTarget(): AnswerQuestionTarget | undefined {
 	return {
 		editor,
 		questionText,
-		promptText
+		promptText,
+		selections: selectedSnapshots.map(selection => selection.range)
 	};
+}
+
+function getNonEmptySelectionSnapshots(editor: vscode.TextEditor) {
+	return editor.selections
+		.map(selection => ({
+			range: toTextSelectionRange(selection),
+			text: editor.document.getText(selection)
+		}))
+		.filter(selection => selection.text.trim().length > 0);
 }
 
 async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: string) {

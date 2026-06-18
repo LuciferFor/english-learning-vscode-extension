@@ -509,6 +509,64 @@ suite('English Learning Plugin extension', () => {
 		}
 	});
 
+	test('translate command inserts below original selection after cursor moves', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		let editor: vscode.TextEditor | undefined;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode) => {
+				assert.strictEqual(mode, 'translate');
+				assert.ok(editor);
+				editor.selection = new vscode.Selection(
+					new vscode.Position(1, 0),
+					new vscode.Position(1, 0)
+				);
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						translation: '我每天都能学习。',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I can study every day.\nCursor moved here.\n',
+				language: 'enlearn'
+			});
+			editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 22)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.translateSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I can study every day.\n我每天都能学习.\nCursor moved here.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
 	test('builds answer-question context from selected question and nearby lines only', () => {
 		const documentText = [
 			'far before 0',
@@ -647,6 +705,66 @@ suite('English Learning Plugin extension', () => {
 		}
 	});
 
+	test('answer question command inserts below original question after cursor moves', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		let editor: vscode.TextEditor | undefined;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode) => {
+				assert.strictEqual(mode, 'answerQuestion');
+				assert.ok(editor);
+				editor.selection = new vscode.Selection(
+					new vscode.Position(2, 0),
+					new vscode.Position(2, 0)
+				);
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						answer: '因为 apple 以元音音素开头。',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						gradings: [],
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: '? Why do we use an before apple?\nExisting answer area.\nCursor moved here.\n',
+				language: 'enlearn'
+			});
+			editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 32)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.answerSelectedQuestion');
+
+			assert.strictEqual(
+				document.getText(),
+				'? Why do we use an before apple?\n! 回答: 因为 apple 以元音音素开头.\nExisting answer area.\nCursor moved here.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
 	test('practice command appends three unanswered questions without selection', async () => {
 		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
 		assert.ok(extension);
@@ -759,6 +877,70 @@ suite('English Learning Plugin extension', () => {
 			assert.strictEqual(
 				document.getText(),
 				'I studying every day.\n! 批改: 错误. 动词形式不对. 建议: I study every day. 原因: can 后应接动词原形,不能用 studying.\nNext line.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('practice command inserts grading below original answer after cursor moves', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		let editor: vscode.TextEditor | undefined;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode) => {
+				assert.strictEqual(mode, 'gradePractice');
+				assert.ok(editor);
+				editor.selection = new vscode.Selection(
+					new vscode.Position(1, 0),
+					new vscode.Position(1, 0)
+				);
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						grading: {
+							correct: false,
+							feedback: '动词形式不对。',
+							correction: 'I study every day.',
+							explanation: '主语后应使用谓语动词。'
+						},
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I studying every day.\nCursor moved here.\n',
+				language: 'enlearn'
+			});
+			editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 21)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I studying every day.\n! 批改: 错误. 动词形式不对. 建议: I study every day. 原因: 主语后应使用谓语动词.\nCursor moved here.\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();
