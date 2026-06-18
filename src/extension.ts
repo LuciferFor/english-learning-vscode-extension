@@ -319,7 +319,7 @@ type EnglishLearningSidebarMessage = {
 };
 
 export const SIDEBAR_KEY_ICON_SIZE_PX = 56;
-export const SIDEBAR_ACTION_ICON_SIZE_PX = 58;
+export const SIDEBAR_ACTION_ICON_SIZE_PX = 44;
 
 class EnglishLearningSidebarProvider implements vscode.WebviewViewProvider {
 	private webviewView: vscode.WebviewView | undefined;
@@ -429,7 +429,7 @@ export function renderEnglishLearningSidebarHtml(
 
 		.action-card {
 			display: grid;
-			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px minmax(0, 1fr) ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
+			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px ${SIDEBAR_ACTION_ICON_SIZE_PX}px minmax(0, 1fr);
 			align-items: center;
 			gap: 10px;
 			min-height: ${Math.max(SIDEBAR_KEY_ICON_SIZE_PX, SIDEBAR_ACTION_ICON_SIZE_PX) + 14}px;
@@ -460,7 +460,7 @@ export function renderEnglishLearningSidebarHtml(
 			width: ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
 			height: ${SIDEBAR_ACTION_ICON_SIZE_PX}px;
 			object-fit: contain;
-			justify-self: end;
+			justify-self: center;
 		}
 
 		.action-label {
@@ -554,11 +554,11 @@ function renderSidebarAction(webview: vscode.Webview, extensionUri: vscode.Uri, 
 
 	return `<button class="action-card" type="button" data-action-id="${escapeHtmlAttribute(action.id)}" title="${escapeHtmlAttribute(`${action.label}\n${action.shortcut} · ${status}`)}">
 		${icon}
+		${actionIcon}
 		<span>
 			<span class="action-label">${escapeHtml(action.label)}</span>
 			<span class="action-meta">${escapeHtml(action.shortcut)} · ${escapeHtml(status)}</span>
 		</span>
-		${actionIcon}
 	</button>`;
 }
 

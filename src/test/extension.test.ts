@@ -164,7 +164,8 @@ suite('English Learning Plugin extension', () => {
 		}
 
 		assert.ok(SIDEBAR_KEY_ICON_SIZE_PX >= 48);
-		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX >= 48);
+		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX >= 40);
+		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX <= 48);
 	});
 
 	test('contributes validation and highlighting settings', () => {
