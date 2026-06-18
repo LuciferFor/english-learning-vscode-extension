@@ -25,6 +25,7 @@ import {
 } from '../relatedWords';
 import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
 import {
+	parsePracticeBatchItems,
 	SIDEBAR_ACTION_ICON_SIZE_PX,
 	SIDEBAR_KEY_ICON_SIZE_PX
 } from '../extension';
@@ -666,6 +667,158 @@ suite('English Learning Plugin extension', () => {
 				document.getText(),
 				'I study every day.\n! 批改: 正确. 答案自然,表达正确.\n'
 			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('parses selected practice question blocks for batch grading', () => {
+		const text = [
+			'? translate I can study every day.',
+			'我每天都能学习.',
+			'// learner note should be ignored',
+			'! 批改: 旧反馈.',
+			'? cloze I can ____ every day.',
+			'I can study every day.'
+		].join('\n');
+
+		const items = parsePracticeBatchItems(text, [{
+			startLine: 0,
+			startCharacter: 0,
+			endLine: 6,
+			endCharacter: 0
+		}]);
+
+		assert.strictEqual(items.length, 2);
+		assert.strictEqual(items[0].id, 'item-1');
+		assert.strictEqual(items[0].question, '? translate I can study every day.');
+		assert.strictEqual(items[0].answer, '我每天都能学习.');
+		assert.strictEqual(items[0].startLine, 0);
+		assert.strictEqual(items[0].endLine, 3);
+		assert.strictEqual(items[1].id, 'item-2');
+		assert.strictEqual(items[1].question, '? cloze I can ____ every day.');
+		assert.strictEqual(items[1].answer, 'I can study every day.');
+	});
+
+	test('practice command batch grades selected question blocks below each block', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'gradePracticeBatch');
+				const match = text.match(/Practice items JSON:\n([\s\S]*?)\n\n\.enlearn learning content:/);
+				assert.ok(match);
+				const items = JSON.parse(match[1]) as Array<{ id: string; question: string; answer: string }>;
+				assert.strictEqual(items.length, 2);
+				assert.deepStrictEqual(items.map(item => item.answer), [
+					'我每天都能学习.',
+					'I can studying every day.'
+				]);
+				assert.ok(!items[0].answer.includes('旧反馈'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						gradings: [
+							{ id: 'item-1', correct: true, feedback: '第一题正确。' },
+							{
+								id: 'item-2',
+								correct: false,
+								feedback: '第二题语法错误。',
+								correction: 'I can study every day.',
+								explanation: 'can 后接动词原形。'
+							}
+						],
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: [
+					'? translate I can study every day.',
+					'我每天都能学习.',
+					'! 批改: 旧反馈.',
+					'? cloze I can ____ every day.',
+					'I can studying every day.',
+					'After.'
+				].join('\n') + '\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(5, 0)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				[
+					'? translate I can study every day.',
+					'我每天都能学习.',
+					'! 批改: 旧反馈.',
+					'! 批改: 正确. 第一题正确.',
+					'? cloze I can ____ every day.',
+					'I can studying every day.',
+					'! 批改: 错误. 第二题语法错误. 建议: I can study every day. 原因: can 后接动词原形.',
+					'After.'
+				].join('\n') + '\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('practice command inserts unanswered feedback locally without AI batch call', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async () => {
+				throw new Error('AI should not be called for unanswered batch items.');
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: '? translate I can study every day.\n? cloze I can ____ every day.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(2, 0)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			assert.ok(document.getText().includes([
+				'? translate I can study every day.',
+				'! 批改: 未作答. 请先填写答案.',
+				'? cloze I can ____ every day.',
+				'! 批改: 未作答. 请先填写答案.'
+			].join('\n')));
 		} finally {
 			exports.setDeepSeekTestOverrides();
 			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');

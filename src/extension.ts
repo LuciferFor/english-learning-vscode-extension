@@ -60,7 +60,7 @@ const ENLEARN_LANGUAGE_ID = 'enlearn';
 const ASCII_PUNCTUATION_PROMPT_RULE = 'All punctuation in JSON string values must be ASCII punctuation only. Use , . : ; ? ! ( ) " \' instead of Chinese punctuation, even when the text is Chinese.';
 
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
-type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice';
+type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice' | 'gradePracticeBatch';
 type LearningDirection = 'en-to-zh' | 'zh-to-en' | 'mixed';
 type PracticeQuestionType = 'translate' | 'cloze';
 
@@ -96,6 +96,23 @@ interface PracticeGrading {
 	explanation?: string;
 }
 
+export interface PracticeBatchItem {
+	id: string;
+	question: string;
+	answer: string;
+	startLine: number;
+	endLine: number;
+}
+
+interface PracticeBatchGrading extends PracticeGrading {
+	id: string;
+}
+
+interface PracticeBatchFeedback {
+	item: PracticeBatchItem;
+	feedback: string;
+}
+
 interface AiLearningResult {
 	translation?: string;
 	explanation?: string;
@@ -107,6 +124,7 @@ interface AiLearningResult {
 	vocabulary: VocabularyItem[];
 	questions: PracticeQuestion[];
 	grading?: PracticeGrading;
+	gradings: PracticeBatchGrading[];
 	direction: LearningDirection;
 }
 
@@ -1425,6 +1443,98 @@ function buildGradePracticeInput(answerText: string, documentText: string) {
 	].join('\n');
 }
 
+function buildGradePracticeBatchInput(items: PracticeBatchItem[], documentText: string) {
+	return [
+		'Practice items JSON:',
+		JSON.stringify(items.map(item => ({
+			id: item.id,
+			question: item.question,
+			answer: item.answer
+		})), null, 2),
+		'',
+		'.enlearn learning content:',
+		documentText.trim()
+	].join('\n');
+}
+
+function toTextSelectionRange(selection: vscode.Selection): TextSelectionRange {
+	return {
+		startLine: selection.start.line,
+		startCharacter: selection.start.character,
+		endLine: selection.end.line,
+		endCharacter: selection.end.character
+	};
+}
+
+export function parsePracticeBatchItems(documentText: string, selections: TextSelectionRange[]): PracticeBatchItem[] {
+	const lines = documentText.split(/\r?\n/);
+	const drafts: Array<{
+		question: string;
+		startLine: number;
+		endLine: number;
+		answerLines: string[];
+	}> = [];
+
+	for (const selection of selections) {
+		const startLine = Math.max(0, Math.min(selection.startLine, selection.endLine));
+		const rawEndLine = selection.endCharacter === 0 && selection.endLine > selection.startLine
+			? selection.endLine - 1
+			: selection.endLine;
+		const endLine = Math.min(lines.length - 1, Math.max(startLine, rawEndLine));
+		let current: typeof drafts[number] | undefined;
+
+		for (let line = startLine; line <= endLine; line++) {
+			const value = lines[line] ?? '';
+			const trimmedStart = value.trimStart();
+
+			if (trimmedStart.startsWith('?')) {
+				if (current) {
+					drafts.push(current);
+				}
+
+				current = {
+					question: value.trim(),
+					startLine: line,
+					endLine: line,
+					answerLines: []
+				};
+				continue;
+			}
+
+			if (!current) {
+				continue;
+			}
+
+			current.endLine = line;
+			if (isPracticeAnswerLine(value)) {
+				current.answerLines.push(value.trim());
+			}
+		}
+
+		if (current) {
+			drafts.push(current);
+		}
+	}
+
+	return drafts.map((draft, index) => ({
+		id: `item-${index + 1}`,
+		question: draft.question,
+		answer: draft.answerLines.join('\n').trim(),
+		startLine: draft.startLine,
+		endLine: draft.endLine
+	}));
+}
+
+function isPracticeAnswerLine(value: string) {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return false;
+	}
+
+	const trimmedStart = value.trimStart();
+	return !trimmedStart.startsWith('?') && !trimmedStart.startsWith('!') && !trimmedStart.startsWith('//');
+}
+
 async function insertPsExplanationAfterSentence(editor: vscode.TextEditor, sentenceEndLine: number, explanation: string | undefined) {
 	const value = formatPsExplanation(explanation ?? '');
 	if (!value) {
@@ -1499,6 +1609,29 @@ async function insertTextBelowSelections(editor: vscode.TextEditor, text: string
 	});
 }
 
+async function insertPracticeBatchFeedbacks(editor: vscode.TextEditor, feedbacks: PracticeBatchFeedback[]) {
+	const usableFeedbacks = feedbacks
+		.filter(item => item.feedback.trim().length > 0)
+		.sort((left, right) => left.item.endLine - right.item.endLine);
+	if (usableFeedbacks.length === 0) {
+		return;
+	}
+
+	await editor.edit(editBuilder => {
+		for (const { item, feedback } of usableFeedbacks) {
+			const value = feedback.trim();
+			const insertLine = item.endLine + 1;
+			if (insertLine >= editor.document.lineCount) {
+				const lastLine = editor.document.lineAt(editor.document.lineCount - 1);
+				editBuilder.insert(lastLine.range.end, `\n${value}`);
+				continue;
+			}
+
+			editBuilder.insert(new vscode.Position(insertLine, 0), `${value}\n`);
+		}
+	});
+}
+
 async function appendTextToDocument(editor: vscode.TextEditor, text: string) {
 	const value = text.trimEnd();
 	if (!value) {
@@ -1560,12 +1693,19 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 		return;
 	}
 
+	const hasAnswer = target.selectedText.length > 0;
+	const batchItems = hasAnswer ? parsePracticeBatchItems(target.editor.document.getText(), target.editor.selections.map(toTextSelectionRange)) : [];
+
+	if (batchItems.length > 0) {
+		await gradePracticeBatch(context, target, batchItems);
+		return;
+	}
+
 	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
 	if (!apiKey) {
 		return;
 	}
 
-	const hasAnswer = target.selectedText.length > 0;
 	await vscode.window.withProgress({
 		location: vscode.ProgressLocation.Notification,
 		title: hasAnswer ? 'English Learning Plugin: grading practice answer' : 'English Learning Plugin: generating practice questions',
@@ -1598,6 +1738,50 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 			}
 
 			await appendTextToDocument(target.editor, block);
+		} catch (error) {
+			handleCommandError(error);
+		}
+	});
+}
+
+async function gradePracticeBatch(context: vscode.ExtensionContext, target: PracticeOrGradeTarget, batchItems: PracticeBatchItem[]) {
+	const answeredItems = batchItems.filter(item => item.answer.trim().length > 0);
+	if (answeredItems.length === 0) {
+		await insertPracticeBatchFeedbacks(target.editor, batchItems.map(item => ({
+			item,
+			feedback: formatUnansweredPracticeFeedback()
+		})));
+		return;
+	}
+
+	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
+	if (!apiKey) {
+		return;
+	}
+
+	await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: `English Learning Plugin: grading ${batchItems.length} practice answers`,
+		cancellable: false
+	}, async () => {
+		try {
+			const response = await requestDeepSeek(apiKey, 'gradePracticeBatch', buildGradePracticeBatchInput(answeredItems, target.documentText));
+			const gradingById = new Map(response.result.gradings.map(grading => [grading.id, grading]));
+			const feedbacks = batchItems.map(item => {
+				if (!item.answer.trim()) {
+					return {
+						item,
+						feedback: formatUnansweredPracticeFeedback()
+					};
+				}
+
+				return {
+					item,
+					feedback: formatPracticeGrading(gradingById.get(item.id)) || '! 批改: 无法批改. DeepSeek 未返回此题结果.'
+				};
+			});
+
+			await insertPracticeBatchFeedbacks(target.editor, feedbacks);
 		} catch (error) {
 			handleCommandError(error);
 		}
@@ -2193,6 +2377,35 @@ Rules:
 ${text}`;
 	}
 
+	if (mode === 'gradePracticeBatch') {
+		return `Grade multiple selected learner answers using the current .enlearn learning content as context.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "gradings": [
+    {
+      "id": "item-1",
+      "correct": false,
+      "feedback": "一句中文反馈",
+      "correction": "可选的正确答案或修改建议",
+      "explanation": "如果错误, 说明为什么错"
+    }
+  ]
+}
+
+Rules:
+- Return exactly one grading for each input item id.
+- Preserve every input item id exactly.
+- Use Chinese feedback.
+- If the answer is correct or acceptable, set correct to true and keep feedback concise.
+- If the answer is wrong or unnatural, set correct to false, provide correction and explanation.
+- Do not rewrite the whole file.
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+${text}`;
+	}
+
 	if (mode === 'gradePractice') {
 		return `Grade the selected learner answer using the current .enlearn learning content as context.
 
@@ -2247,7 +2460,8 @@ ${text}`;
 		contextExplain: 'Explain the selected text only by using its sentence context. Focus on the selected text role, meaning, grammar reason, and why this form is used here. Return one concise Chinese explanation suitable for inline PS annotation.',
 		contextTranslate: 'Translate the selected word only by using its sentence context. Return one concise meaning for inline annotation.',
 		practice: 'Create three practice questions from this .enlearn learning content.',
-		gradePractice: 'Grade the selected learner answer from this .enlearn learning content.'
+		gradePractice: 'Grade the selected learner answer from this .enlearn learning content.',
+		gradePracticeBatch: 'Grade multiple selected learner answers from this .enlearn learning content.'
 	}[mode];
 
 	return `${task}
@@ -2276,6 +2490,7 @@ function parseAiLearningResult(content: string, sourceText: string): AiLearningR
 		vocabulary: readVocabulary(object.vocabulary),
 		questions: readPracticeQuestions(object.questions),
 		grading: readPracticeGrading(object.grading),
+		gradings: readPracticeBatchGradings(object.gradings),
 		direction
 	};
 }
@@ -2428,6 +2643,10 @@ function formatPracticeGrading(grading: PracticeGrading | undefined) {
 	}
 
 	return normalizeAsciiPunctuation(parts.join(' ').replace(/\s+/g, ' ').trim());
+}
+
+function formatUnansweredPracticeFeedback() {
+	return '! 批改: 未作答. 请先填写答案.';
 }
 
 function sanitizePracticePrompt(value: string) {
@@ -2589,6 +2808,33 @@ function readPracticeGrading(value: unknown): PracticeGrading | undefined {
 		correction: readString(object.correction),
 		explanation: readString(object.explanation)
 	};
+}
+
+function readPracticeBatchGradings(value: unknown): PracticeBatchGrading[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	return value.flatMap(item => {
+		if (!item || typeof item !== 'object' || Array.isArray(item)) {
+			return [];
+		}
+
+		const object = item as Record<string, unknown>;
+		const id = readString(object.id);
+		const correct = readBoolean(object.correct);
+		if (!id || correct === undefined) {
+			return [];
+		}
+
+		return [{
+			id,
+			correct,
+			feedback: readString(object.feedback),
+			correction: readString(object.correction),
+			explanation: readString(object.explanation)
+		}];
+	});
 }
 
 function readBoolean(value: unknown) {
