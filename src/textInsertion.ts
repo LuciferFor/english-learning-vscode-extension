@@ -30,6 +30,27 @@ export function normalizeInsertedTranslation(value: string) {
 		.trim();
 }
 
+export function isSingleEnglishWord(value: string) {
+	return /^[A-Za-z]+(?:['’][A-Za-z]+)?(?:-[A-Za-z]+)*$/.test(value.trim());
+}
+
+export function normalizeInlineTranslation(value: string) {
+	return value
+		.replace(/^```json\s*/i, '')
+		.replace(/^```\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.replace(/^[（(]\s*/, '')
+		.replace(/\s*[）)]$/, '')
+		.split(/\r?\n/)[0]
+		.replace(/[。.!?！？]+$/g, '')
+		.trim();
+}
+
+export function formatInlineTranslation(value: string) {
+	const normalized = normalizeInlineTranslation(value);
+	return normalized ? `(${normalized})` : '';
+}
+
 export function collectSentenceContext(lines: TextLine[], selection: TextSelectionRange, maxLines = 6) {
 	const collected: TextLine[] = [];
 	const startIndex = lines.findIndex(line => line.lineNumber === selection.startLine);

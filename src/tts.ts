@@ -15,7 +15,7 @@ export const DEFAULT_TTS_SETTINGS: TtsSettings = {
 	lang: 'en-GB',
 	rate: '+0%',
 	pitch: '+0Hz',
-	volume: '+0%',
+	volume: '+100%',
 	timeoutMs: 10000,
 	maxTextLength: 500
 };
@@ -82,6 +82,7 @@ export function buildPowerShellMediaPlayerScript(audioPath: string) {
 		'$audioUri = [Uri]::new((Resolve-Path -LiteralPath $audioPath).ProviderPath)',
 		`$player = New-Object System.Windows.Media.MediaPlayer`,
 		'$player.Open($audioUri)',
+		'$player.Volume = 1.0',
 		'$player.Play()',
 		'while (-not $player.NaturalDuration.HasTimeSpan) { Start-Sleep -Milliseconds 50 }',
 		'Start-Sleep -Milliseconds ([Math]::Ceiling($player.NaturalDuration.TimeSpan.TotalMilliseconds) + 100)',

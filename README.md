@@ -4,36 +4,39 @@
 
 ## 功能
 
-- 对选中的中英文内容做互译、解释、注解和学习块生成；互译结果会直接插入到下一行，解释结果会以 `（PS: ...）` 插入到所在语句后。
+- 对选中的中英文内容做互译、解释、注解和学习块生成；单词互译会插入到词后，句子互译会插入到下一行，解释结果会以 `（PS: ...）` 插入到所在语句后。
 - DeepSeek API key 使用 VS Code SecretStorage 保存，不写入项目文件。
 - 注册 `.enlearn` 语言，内置语法高亮、片段、英文蓝色高亮和中文橙色高亮。
 - 本地检查 `.enlearn` 格式错误，并在配置 API key 后增量检查英文拼写、用词和语法。
 - 在 `.enlearn` 中提供英文续写预测，并用 hover 显示中文翻译。
+- 根据当前 `.enlearn` 学习内容生成 3 道练习题，或批改选中的作答内容。
 - 根据选中单词或光标单词生成 5 个相关词。
 - 使用 Edge TTS 播放选中英文单词或句子的英式发音。
 - 侧边栏提供中文快捷操作列表，快捷键显示在每行右侧；顶部不再放长文字按钮。
 
 ## 命令
 
-- `英语学习插件: 中英互译选中文本 (Ctrl+Alt+W)`
-- `英语学习插件: 解释选中文本 (Ctrl+Alt+Q)`
+- `英语学习插件: 中英互译选中文本 (Ctrl+Shift+Alt+W)`
+- `英语学习插件: 解释选中文本 (Ctrl+Shift+Alt+Q)`
 - `英语学习插件: 生成学习注解`
-- `英语学习插件: 插入 .enlearn 学习块 (Ctrl+Alt+A)`
-- `英语学习插件: 总结学习内容 (Ctrl+Alt+E)`
-- `英语学习插件: 生成相关词 (Ctrl+Alt+S)`
-- `英语学习插件: 播放发音 (Ctrl+Alt+D)`
+- `英语学习插件: 插入 .enlearn 学习块 (Ctrl+Shift+Alt+Z)`
+- `英语学习插件: 总结学习内容 (Ctrl+Shift+Alt+E)`
+- `英语学习插件: 生成/批改练习 (Ctrl+Shift+Alt+C)`
+- `英语学习插件: 生成相关词 (Ctrl+Shift+Alt+X)`
+- `英语学习插件: 播放发音 (Ctrl+Shift+Alt+D)`
 - `英语学习插件: 设置 DeepSeek API Key`
 
 ## 快捷键
 
 默认快捷键只在 `.enlearn` 文件中生效。
 
-- `Ctrl+Alt+Q`：按当前语句上下文解释选中文本，并把 `（PS: ...）` 插入到语句末尾。
-- `Ctrl+Alt+W`：中英互译选中文本，并把译文插入到选区下一行，不替换原文。
-- `Ctrl+Alt+E`：总结选中文本；无选中时总结当前 `.enlearn` 文件。
-- `Ctrl+Alt+A`：根据选中文本插入 `.enlearn` 学习块。
-- `Ctrl+Alt+S`：根据选中单词或光标单词生成 5 个相关词。
-- `Ctrl+Alt+D`：播放选中英文单词或句子的英式发音。
+- `Ctrl+Shift+Alt+Q`：按当前语句上下文解释选中文本，并把 `（PS: ...）` 插入到语句末尾。
+- `Ctrl+Shift+Alt+W`：中英互译选中文本；选中单个英文单词时把释义插入到词后，例如 `lesson(课)`，选中句子时把译文插入到下一行。
+- `Ctrl+Shift+Alt+E`：总结选中文本；无选中时总结当前 `.enlearn` 文件。
+- `Ctrl+Shift+Alt+C`：无选中时在文件底部生成 3 道练习；有选中时批改选中答案并把反馈插入下一行。
+- `Ctrl+Shift+Alt+Z`：根据选中文本插入 `.enlearn` 学习块。
+- `Ctrl+Shift+Alt+X`：根据选中单词或光标单词生成 5 个相关词。
+- `Ctrl+Shift+Alt+D`：播放选中英文单词或句子的英式发音。
 
 如果其他扩展在同一上下文占用了相同快捷键，可在 VS Code Keyboard Shortcuts 中覆盖。
 
@@ -41,12 +44,13 @@
 
 侧边栏保留大行点击入口，不再在标题栏显示长文字按钮：
 
-- `解释选中文本`，右侧显示 `Ctrl+Alt+Q · 需选中`。
-- `中英互译`，右侧显示 `Ctrl+Alt+W · 需选中`。
-- `总结学习内容`，右侧显示 `Ctrl+Alt+E · 可直接用`。
-- `插入学习块`，右侧显示 `Ctrl+Alt+A · 需选中`。
-- `生成相关词`，右侧显示 `Ctrl+Alt+S · 可直接用`。
-- `播放发音`，右侧显示 `Ctrl+Alt+D · 需选中`。
+- `解释选中文本`，右侧显示 `Ctrl+Shift+Alt+Q · 需选中`。
+- `中英互译`，右侧显示 `Ctrl+Shift+Alt+W · 需选中`。
+- `总结学习内容`，右侧显示 `Ctrl+Shift+Alt+E · 可直接用`。
+- `练习/批改`，右侧显示 `Ctrl+Shift+Alt+C · 可直接用`。
+- `插入学习块`，右侧显示 `Ctrl+Shift+Alt+Z · 需选中`。
+- `生成相关词`，右侧显示 `Ctrl+Shift+Alt+X · 可直接用`。
+- `播放发音`，右侧显示 `Ctrl+Shift+Alt+D · 需选中`。
 
 生成相关词后，侧边栏会显示 5 个词汇结果。点击某个结果会插入为 `.enlearn` 的 `[word]` 块。
 
@@ -71,7 +75,7 @@
 - `englishLearning.tts.lang`: TTS language tag. Defaults to `en-GB`.
 - `englishLearning.tts.rate`: TTS speech rate. Defaults to `+0%`.
 - `englishLearning.tts.pitch`: TTS speech pitch. Defaults to `+0Hz`.
-- `englishLearning.tts.volume`: TTS speech volume. Defaults to `+0%`.
+- `englishLearning.tts.volume`: TTS speech volume. Defaults to `+100%`.
 - `englishLearning.tts.timeoutMs`: TTS generation timeout. Defaults to `10000`.
 - `englishLearning.tts.maxTextLength`: Maximum selected text length for pronunciation playback. Defaults to `500`.
 

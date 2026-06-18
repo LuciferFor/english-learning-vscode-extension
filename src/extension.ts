@@ -42,8 +42,10 @@ import {
 import {
 	TextSelectionRange,
 	collectSentenceContext,
+	formatInlineTranslation,
 	formatPsExplanation,
 	getLineAfterSelections,
+	isSingleEnglishWord,
 	normalizeInsertedTranslation
 } from './textInsertion';
 
@@ -53,8 +55,9 @@ const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
 
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
-type DeepSeekRequestMode = LearningMode | 'contextExplain';
+type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice';
 type LearningDirection = 'en-to-zh' | 'zh-to-en' | 'mixed';
+type PracticeQuestionType = 'translate' | 'cloze';
 
 interface SelectedText {
 	editor: vscode.TextEditor;
@@ -76,6 +79,18 @@ interface VocabularyItem {
 	note?: string;
 }
 
+interface PracticeQuestion {
+	type: PracticeQuestionType;
+	prompt: string;
+}
+
+interface PracticeGrading {
+	correct: boolean;
+	feedback?: string;
+	correction?: string;
+	explanation?: string;
+}
+
 interface AiLearningResult {
 	translation?: string;
 	explanation?: string;
@@ -85,8 +100,17 @@ interface AiLearningResult {
 	examples: string[];
 	practice: string[];
 	vocabulary: VocabularyItem[];
+	questions: PracticeQuestion[];
+	grading?: PracticeGrading;
 	direction: LearningDirection;
 }
+
+interface DeepSeekResponse {
+	options: DeepSeekOptions;
+	result: AiLearningResult;
+}
+
+type DeepSeekRequester = (apiKey: string, mode: DeepSeekRequestMode, text: string) => Promise<DeepSeekResponse>;
 
 interface LearningRecord {
 	id: string;
@@ -120,6 +144,17 @@ interface RelatedWordTarget {
 	sourceUri: string;
 }
 
+interface InlineTranslationTarget {
+	contextText: string;
+	insertPosition: vscode.Position;
+}
+
+interface PracticeOrGradeTarget {
+	editor: vscode.TextEditor;
+	documentText: string;
+	selectedText: string;
+}
+
 let outputChannel: vscode.OutputChannel;
 let enlearnDiagnosticCollection: vscode.DiagnosticCollection;
 let englishWordDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -132,6 +167,8 @@ const aiValidationCaches = new Map<string, Map<string, AiValidationCacheEntry>>(
 let latestPrediction: PredictionCacheEntry | undefined;
 const predictionCache = new Map<string, PredictionCacheEntry>();
 let activeAudioPlayback: ChildProcess | undefined;
+let testDeepSeekApiKey: string | undefined;
+let testDeepSeekRequester: DeepSeekRequester | undefined;
 
 function withDeepSeekNonThinking(params: ChatCompletionCreateParamsNonStreaming) {
 	return {
@@ -145,12 +182,10 @@ function withDeepSeekNonThinking(params: ChatCompletionCreateParamsNonStreaming)
 export function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel('English Learning Plugin');
 	enlearnDiagnosticCollection = vscode.languages.createDiagnosticCollection('english-learning-plugin');
-	const treeProvider = new EnglishLearningTreeProvider();
+	const sidebarProvider = new EnglishLearningSidebarProvider(context.extensionUri);
 	context.subscriptions.push(outputChannel);
 	context.subscriptions.push(enlearnDiagnosticCollection);
-	context.subscriptions.push(vscode.window.createTreeView('englishLearning.actionsView', {
-		treeDataProvider: treeProvider
-	}));
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider('englishLearning.actionsView', sidebarProvider));
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('englishLearning.translateSelection', () => runLearningCommand(context, 'translate')),
@@ -158,7 +193,8 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('englishLearning.annotateSelection', () => runLearningCommand(context, 'annotate')),
 		vscode.commands.registerCommand('englishLearning.insertEnlearnBlock', () => insertEnlearnBlock(context)),
 		vscode.commands.registerCommand('englishLearning.summarizeLearningContent', () => summarizeLearningContent(context)),
-		vscode.commands.registerCommand('englishLearning.generateRelatedWords', () => generateRelatedWords(context, treeProvider)),
+		vscode.commands.registerCommand('englishLearning.practiceOrGradeSelection', () => practiceOrGradeSelection(context)),
+		vscode.commands.registerCommand('englishLearning.generateRelatedWords', () => generateRelatedWords(context, sidebarProvider)),
 		vscode.commands.registerCommand('englishLearning.insertRelatedWord', (item?: RelatedWord) => insertRelatedWord(item)),
 		vscode.commands.registerCommand('englishLearning.playSelectionAudio', () => playSelectionAudio(context)),
 		vscode.commands.registerCommand('englishLearning.setApiKey', () => setDeepSeekApiKey(context))
@@ -249,88 +285,301 @@ export function activate(context: vscode.ExtensionContext) {
 			void validateEnlearnDocument(context, document, false);
 		}
 	}
+
+	return {
+		setDeepSeekTestOverrides
+	};
 }
 
 export function deactivate() {}
 
-class EnglishLearningTreeProvider implements vscode.TreeDataProvider<EnglishLearningTreeItem> {
-	private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<EnglishLearningTreeItem | undefined>();
-	readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+export function setDeepSeekTestOverrides(overrides?: {
+	apiKey?: string;
+	requester?: DeepSeekRequester;
+}) {
+	testDeepSeekApiKey = overrides?.apiKey;
+	testDeepSeekRequester = overrides?.requester;
+}
+
+type EnglishLearningSidebarMessage = {
+	type?: string;
+	actionId?: string;
+	relatedIndex?: number;
+};
+
+export const SIDEBAR_KEY_ICON_SIZE_PX = 56;
+
+class EnglishLearningSidebarProvider implements vscode.WebviewViewProvider {
+	private webviewView: vscode.WebviewView | undefined;
 	private relatedWordsResult: RelatedWordsResult | undefined;
+
+	constructor(private readonly extensionUri: vscode.Uri) {}
+
+	resolveWebviewView(webviewView: vscode.WebviewView) {
+		this.webviewView = webviewView;
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'resources')]
+		};
+		webviewView.webview.onDidReceiveMessage(message => {
+			void this.handleMessage(message);
+		});
+		this.refresh();
+	}
 
 	setRelatedWordsResult(result: RelatedWordsResult) {
 		this.relatedWordsResult = result;
-		this.onDidChangeTreeDataEmitter.fire(undefined);
+		this.refresh();
 	}
 
-	getTreeItem(element: EnglishLearningTreeItem) {
-		return element;
-	}
-
-	getChildren(element?: EnglishLearningTreeItem): EnglishLearningTreeItem[] {
-		if (element) {
-			return element.children;
+	private refresh() {
+		if (!this.webviewView) {
+			return;
 		}
 
-		const items = ENGLISH_LEARNING_ACTIONS.map(action => createActionTreeItem(action));
-		if (this.relatedWordsResult) {
-			items.push(createRelatedWordsRootItem(this.relatedWordsResult));
+		this.webviewView.webview.html = renderEnglishLearningSidebarHtml(
+			this.webviewView.webview,
+			this.extensionUri,
+			ENGLISH_LEARNING_ACTIONS,
+			this.relatedWordsResult
+		);
+	}
+
+	private async handleMessage(message: EnglishLearningSidebarMessage) {
+		if (!message || typeof message !== 'object') {
+			return;
 		}
 
-		return items;
+		if (message.type === 'runAction' && typeof message.actionId === 'string') {
+			const action = ENGLISH_LEARNING_ACTIONS.find(item => item.id === message.actionId);
+			if (action) {
+				await vscode.commands.executeCommand(action.command);
+			}
+			return;
+		}
+
+		if (message.type === 'insertRelatedWord' && typeof message.relatedIndex === 'number') {
+			const word = this.relatedWordsResult?.words[message.relatedIndex];
+			if (word) {
+				await vscode.commands.executeCommand('englishLearning.insertRelatedWord', word);
+			}
+		}
 	}
 }
 
-class EnglishLearningTreeItem extends vscode.TreeItem {
-	constructor(
-		label: string,
-		collapsibleState: vscode.TreeItemCollapsibleState,
-		readonly children: EnglishLearningTreeItem[] = []
-	) {
-		super(label, collapsibleState);
+export function renderEnglishLearningSidebarHtml(
+	webview: vscode.Webview,
+	extensionUri: vscode.Uri,
+	actions: EnglishLearningAction[],
+	relatedWordsResult?: RelatedWordsResult
+) {
+	const nonce = createNonce();
+	const actionCards = actions.map(action => renderSidebarAction(webview, extensionUri, action)).join('');
+	const relatedWords = relatedWordsResult ? renderRelatedWordsSection(relatedWordsResult) : '';
+
+	return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style nonce="${nonce}">
+		:root {
+			color-scheme: light dark;
+		}
+
+		body {
+			box-sizing: border-box;
+			margin: 0;
+			padding: 10px;
+			color: var(--vscode-foreground);
+			background: var(--vscode-sideBar-background);
+			font-family: var(--vscode-font-family);
+			font-size: var(--vscode-font-size);
+		}
+
+		.actions {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+
+		.action-card,
+		.related-word {
+			width: 100%;
+			border: 1px solid transparent;
+			border-radius: 10px;
+			color: var(--vscode-foreground);
+			background: transparent;
+			text-align: left;
+			cursor: pointer;
+		}
+
+		.action-card {
+			display: grid;
+			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px minmax(0, 1fr);
+			align-items: center;
+			gap: 10px;
+			min-height: ${SIDEBAR_KEY_ICON_SIZE_PX + 14}px;
+			padding: 6px 8px;
+		}
+
+		.action-card:hover,
+		.related-word:hover {
+			border-color: var(--vscode-focusBorder);
+			background: var(--vscode-list-hoverBackground);
+		}
+
+		.action-card:focus,
+		.related-word:focus {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: 2px;
+		}
+
+		.action-icon {
+			display: block;
+			width: ${SIDEBAR_KEY_ICON_SIZE_PX}px;
+			height: ${SIDEBAR_KEY_ICON_SIZE_PX}px;
+			object-fit: contain;
+		}
+
+		.action-label {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			font-size: 14px;
+			font-weight: 600;
+			line-height: 1.4;
+		}
+
+		.action-meta {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			margin-top: 2px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 12px;
+			line-height: 1.35;
+		}
+
+		.related-section {
+			margin-top: 16px;
+			padding-top: 12px;
+			border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+		}
+
+		.related-title {
+			margin: 0 0 8px;
+			color: var(--vscode-sideBarTitle-foreground);
+			font-size: 13px;
+			font-weight: 700;
+		}
+
+		.related-list {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+
+		.related-word {
+			padding: 8px 10px;
+		}
+
+		.related-word-main {
+			font-weight: 700;
+		}
+
+		.related-word-meta {
+			margin-top: 2px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 12px;
+		}
+	</style>
+</head>
+<body>
+	<div class="actions" aria-label="英语学习快捷操作">
+		${actionCards}
+	</div>
+	${relatedWords}
+	<script nonce="${nonce}">
+		const vscode = acquireVsCodeApi();
+		document.addEventListener('click', event => {
+			const actionButton = event.target.closest('[data-action-id]');
+			if (actionButton) {
+				vscode.postMessage({ type: 'runAction', actionId: actionButton.dataset.actionId });
+				return;
+			}
+
+			const relatedButton = event.target.closest('[data-related-index]');
+			if (relatedButton) {
+				vscode.postMessage({ type: 'insertRelatedWord', relatedIndex: Number(relatedButton.dataset.relatedIndex) });
+			}
+		});
+	</script>
+</body>
+</html>`;
+}
+
+function renderSidebarAction(webview: vscode.Webview, extensionUri: vscode.Uri, action: EnglishLearningAction) {
+	const iconUri = action.iconPath ? webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, action.iconPath)).toString() : '';
+	const status = action.requiresSelection ? '需选中' : '可直接用';
+	const alt = `${action.shortcut} ${action.label}`;
+	const icon = iconUri
+		? `<img class="action-icon" src="${escapeHtmlAttribute(iconUri)}" alt="${escapeHtmlAttribute(alt)}">`
+		: `<span class="action-icon" aria-hidden="true"></span>`;
+
+	return `<button class="action-card" type="button" data-action-id="${escapeHtmlAttribute(action.id)}" title="${escapeHtmlAttribute(`${action.label}\n${action.shortcut} · ${status}`)}">
+		${icon}
+		<span>
+			<span class="action-label">${escapeHtml(action.label)}</span>
+			<span class="action-meta">${escapeHtml(action.shortcut)} · ${escapeHtml(status)}</span>
+		</span>
+	</button>`;
+}
+
+function renderRelatedWordsSection(result: RelatedWordsResult) {
+	const words = result.words.map((word, index) => {
+		const meta = [word.domain, word.example].filter(Boolean).join(' · ');
+		return `<button class="related-word" type="button" data-related-index="${index}" title="${escapeHtmlAttribute(word.note ?? '')}">
+			<div class="related-word-main">${escapeHtml(word.word)} - ${escapeHtml(word.meaning)}</div>
+			${meta ? `<div class="related-word-meta">${escapeHtml(meta)}</div>` : ''}
+		</button>`;
+	}).join('');
+
+	return `<section class="related-section" aria-label="相关词">
+		<h2 class="related-title">相关词：${escapeHtml(result.source)}（点击插入）</h2>
+		<div class="related-list">${words}</div>
+	</section>`;
+}
+
+function createNonce() {
+	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let text = '';
+	for (let index = 0; index < 32; index += 1) {
+		text += possible.charAt(Math.floor(Math.random() * possible.length));
 	}
+	return text;
 }
 
-function createActionTreeItem(action: EnglishLearningAction) {
-	const item = new EnglishLearningTreeItem(action.label, vscode.TreeItemCollapsibleState.None);
-	item.id = `action.${action.id}`;
-	item.description = `${action.shortcut} · ${action.requiresSelection ? '需选中' : '可直接用'}`;
-	item.tooltip = `${action.label}\n快捷键：${action.shortcut}\n${action.requiresSelection ? '需要先选中文本。' : '可对选中文本或当前内容执行。'}`;
-	item.iconPath = new vscode.ThemeIcon('zap');
-	item.command = {
-		command: action.command,
-		title: action.label
-	};
-	return item;
+function escapeHtml(value: string) {
+	return value.replace(/[&<>"']/g, character => {
+		switch (character) {
+			case '&':
+				return '&amp;';
+			case '<':
+				return '&lt;';
+			case '>':
+				return '&gt;';
+			case '"':
+				return '&quot;';
+			default:
+				return '&#39;';
+		}
+	});
 }
 
-function createRelatedWordsRootItem(result: RelatedWordsResult) {
-	const item = new EnglishLearningTreeItem(
-		`相关词：${result.source}`,
-		vscode.TreeItemCollapsibleState.Expanded,
-		result.words.map(createRelatedWordTreeItem)
-	);
-	item.id = `related.${result.source}`;
-	item.description = `${result.words.length} 个`;
-	item.tooltip = '点击相关词可插入到当前 .enlearn 编辑器。';
-	item.iconPath = new vscode.ThemeIcon('symbol-keyword');
-	return item;
-}
-
-function createRelatedWordTreeItem(word: RelatedWord) {
-	const item = new EnglishLearningTreeItem(`${word.word} - ${word.meaning}`, vscode.TreeItemCollapsibleState.None);
-	item.id = `related.${word.word}.${word.meaning}`;
-	item.description = word.domain;
-	item.tooltip = [word.domain ? `领域：${word.domain}` : undefined, word.example ? `例句：${word.example}` : undefined, word.note ? `备注：${word.note}` : undefined]
-		.filter(Boolean)
-		.join('\n');
-	item.iconPath = new vscode.ThemeIcon('symbol-string');
-	item.command = {
-		command: 'englishLearning.insertRelatedWord',
-		title: '插入相关词',
-		arguments: [word]
-	};
-	return item;
+function escapeHtmlAttribute(value: string) {
+	return escapeHtml(value);
 }
 
 async function provideEnlearnInlineCompletions(
@@ -946,10 +1195,15 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 	}, async () => {
 		try {
 			const contextExplanation = mode === 'explain' ? getSelectionSentenceContext(selected.editor) : undefined;
+			const inlineTranslation = mode === 'translate' ? getInlineTranslationTarget(selected.editor) : undefined;
 			const response = await requestDeepSeek(
 				apiKey,
-				mode === 'explain' ? 'contextExplain' : mode,
-				contextExplanation ? buildContextExplainInput(selected.text, contextExplanation.text) : selected.text
+				mode === 'explain' ? 'contextExplain' : inlineTranslation ? 'contextTranslate' : mode,
+				contextExplanation
+					? buildContextExplainInput(selected.text, contextExplanation.text)
+					: inlineTranslation
+						? buildContextTranslateInput(selected.text, inlineTranslation.contextText)
+						: selected.text
 			);
 			const content = mode === 'annotate'
 				? toEnlearnBlock(selected.text, response.result, response.options.model)
@@ -969,7 +1223,11 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 			});
 
 			if (mode === 'translate') {
-				await insertTranslationBelowSelection(selected.editor, response.result.translation);
+				if (inlineTranslation) {
+					await insertInlineTranslation(selected.editor, inlineTranslation.insertPosition, response.result.translation);
+				} else {
+					await insertTranslationBelowSelection(selected.editor, response.result.translation);
+				}
 				return;
 			}
 
@@ -1007,12 +1265,58 @@ function getSelectionSentenceContext(editor: vscode.TextEditor) {
 	return collectSentenceContext(lines, range);
 }
 
+function getInlineTranslationTarget(editor: vscode.TextEditor): InlineTranslationTarget | undefined {
+	if (editor.selections.length !== 1) {
+		return undefined;
+	}
+
+	const selection = editor.selection;
+	const rawText = editor.document.getText(selection);
+	const selectedWord = rawText.trim();
+	if (!isSingleEnglishWord(selectedWord)) {
+		return undefined;
+	}
+
+	const context = getSelectionSentenceContext(editor);
+	if (!context.text) {
+		return undefined;
+	}
+
+	const leadingWhitespaceLength = rawText.length - rawText.trimStart().length;
+	const trailingWhitespaceLength = rawText.length - rawText.trimEnd().length;
+	const insertOffset = editor.document.offsetAt(selection.end) - trailingWhitespaceLength;
+
+	return {
+		contextText: context.text,
+		insertPosition: editor.document.positionAt(Math.max(editor.document.offsetAt(selection.start) + leadingWhitespaceLength, insertOffset))
+	};
+}
+
 function buildContextExplainInput(selectedText: string, sentenceContext: string) {
 	return [
 		`Selected text: ${selectedText}`,
 		'',
 		'Sentence context:',
 		sentenceContext
+	].join('\n');
+}
+
+function buildContextTranslateInput(selectedText: string, sentenceContext: string) {
+	return [
+		`Selected word: ${selectedText.trim()}`,
+		'',
+		'Sentence context:',
+		sentenceContext
+	].join('\n');
+}
+
+function buildGradePracticeInput(answerText: string, documentText: string) {
+	return [
+		'Learner answer:',
+		answerText.trim(),
+		'',
+		'.enlearn learning content:',
+		documentText.trim()
 	].join('\n');
 }
 
@@ -1027,6 +1331,18 @@ async function insertPsExplanationAfterSentence(editor: vscode.TextEditor, sente
 	const line = editor.document.lineAt(safeLine);
 	await editor.edit(editBuilder => {
 		editBuilder.insert(line.range.end, value);
+	});
+}
+
+async function insertInlineTranslation(editor: vscode.TextEditor, position: vscode.Position, translation: string | undefined) {
+	const value = formatInlineTranslation(translation ?? '');
+	if (!value) {
+		vscode.window.showWarningMessage('DeepSeek did not return a usable word translation.');
+		return;
+	}
+
+	await editor.edit(editBuilder => {
+		editBuilder.insert(position, value);
 	});
 }
 
@@ -1051,6 +1367,45 @@ async function insertTranslationBelowSelection(editor: vscode.TextEditor, transl
 		}
 
 		editBuilder.insert(new vscode.Position(insertLine, 0), `${value}\n`);
+	});
+}
+
+async function insertTextBelowSelections(editor: vscode.TextEditor, text: string) {
+	const value = text.trim();
+	if (!value) {
+		return;
+	}
+
+	const insertLine = getLineAfterSelections(editor.selections.map(selection => ({
+		startLine: selection.start.line,
+		startCharacter: selection.start.character,
+		endLine: selection.end.line,
+		endCharacter: selection.end.character
+	})));
+
+	await editor.edit(editBuilder => {
+		if (insertLine >= editor.document.lineCount) {
+			const lastLine = editor.document.lineAt(editor.document.lineCount - 1);
+			editBuilder.insert(lastLine.range.end, `\n${value}`);
+			return;
+		}
+
+		editBuilder.insert(new vscode.Position(insertLine, 0), `${value}\n`);
+	});
+}
+
+async function appendTextToDocument(editor: vscode.TextEditor, text: string) {
+	const value = text.trimEnd();
+	if (!value) {
+		return;
+	}
+
+	const fullText = editor.document.getText();
+	const lastLine = editor.document.lineAt(editor.document.lineCount - 1);
+	const prefix = fullText.length === 0 || fullText.endsWith('\n') ? '' : '\n';
+	const separator = fullText.trim().length === 0 ? '' : '\n';
+	await editor.edit(editBuilder => {
+		editBuilder.insert(lastLine.range.end, `${prefix}${separator}${value}\n`);
 	});
 }
 
@@ -1088,6 +1443,56 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 			});
 
 			await showMarkdownDocument(content);
+		} catch (error) {
+			handleCommandError(error);
+		}
+	});
+}
+
+async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
+	const target = getPracticeOrGradeTarget();
+	if (!target) {
+		return;
+	}
+
+	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
+	if (!apiKey) {
+		return;
+	}
+
+	const hasAnswer = target.selectedText.length > 0;
+	await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: hasAnswer ? 'English Learning Plugin: grading practice answer' : 'English Learning Plugin: generating practice questions',
+		cancellable: false
+	}, async () => {
+		try {
+			const response = await requestDeepSeek(
+				apiKey,
+				hasAnswer ? 'gradePractice' : 'practice',
+				hasAnswer
+					? buildGradePracticeInput(target.selectedText, target.documentText)
+					: target.documentText
+			);
+
+			if (hasAnswer) {
+				const feedback = formatPracticeGrading(response.result.grading);
+				if (!feedback) {
+					vscode.window.showWarningMessage('DeepSeek did not return usable grading feedback.');
+					return;
+				}
+
+				await insertTextBelowSelections(target.editor, feedback);
+				return;
+			}
+
+			const block = formatPracticeBlock(response.result.questions, new Date());
+			if (!block) {
+				vscode.window.showWarningMessage('DeepSeek did not return usable practice questions.');
+				return;
+			}
+
+			await appendTextToDocument(target.editor, block);
 		} catch (error) {
 			handleCommandError(error);
 		}
@@ -1141,7 +1546,7 @@ async function insertEnlearnBlock(context: vscode.ExtensionContext) {
 	});
 }
 
-async function generateRelatedWords(context: vscode.ExtensionContext, treeProvider: EnglishLearningTreeProvider) {
+async function generateRelatedWords(context: vscode.ExtensionContext, sidebarProvider: EnglishLearningSidebarProvider) {
 	const target = getRelatedWordTarget();
 	if (!target) {
 		return;
@@ -1159,7 +1564,7 @@ async function generateRelatedWords(context: vscode.ExtensionContext, treeProvid
 	}, async () => {
 		try {
 			const result = await requestDeepSeekRelatedWords(apiKey, target.word);
-			treeProvider.setRelatedWordsResult(result);
+			sidebarProvider.setRelatedWordsResult(result);
 			vscode.window.showInformationMessage(`Generated ${result.words.length} related words for "${result.source}".`);
 		} catch (error) {
 			handleCommandError(error);
@@ -1465,6 +1870,10 @@ async function setDeepSeekApiKey(context: vscode.ExtensionContext) {
 }
 
 async function getDeepSeekApiKeyOrPrompt(context: vscode.ExtensionContext) {
+	if (testDeepSeekApiKey) {
+		return testDeepSeekApiKey;
+	}
+
 	const existing = await context.secrets.get(DEEPSEEK_SECRET_KEY);
 	if (existing) {
 		return existing;
@@ -1534,7 +1943,37 @@ function getSelectedTextOrCurrentDocument(): SelectedText | undefined {
 	};
 }
 
+function getPracticeOrGradeTarget(): PracticeOrGradeTarget | undefined {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) {
+		vscode.window.showWarningMessage('Open a .enlearn editor first.');
+		return undefined;
+	}
+
+	const documentText = editor.document.getText().trim();
+	if (!documentText) {
+		vscode.window.showWarningMessage('The current .enlearn file has no learning content.');
+		return undefined;
+	}
+
+	const selectedText = editor.selections
+		.map(selection => editor.document.getText(selection))
+		.filter(value => value.trim().length > 0)
+		.join('\n')
+		.trim();
+
+	return {
+		editor,
+		documentText,
+		selectedText
+	};
+}
+
 async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: string) {
+	if (testDeepSeekRequester) {
+		return testDeepSeekRequester(apiKey, mode, text);
+	}
+
 	const options = getDeepSeekOptions();
 	const client = new OpenAI({
 		apiKey,
@@ -1604,6 +2043,70 @@ Rules:
 ${text}`;
 	}
 
+	if (mode === 'contextTranslate') {
+		return `Translate the selected word based on its sentence context.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "translation": "当前句中最合适的简短释义",
+  "direction": "en-to-zh | zh-to-en | mixed"
+}
+
+Rules:
+- 只翻译 selected word 在 sentence context 里的意思。
+- 如果 selected word 是英文，只输出简短中文释义，例如 "课"、"课程"。
+- 不要翻译整句，不要解释语法，不要输出括号、标点、列表或 Markdown。
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+${text}`;
+	}
+
+	if (mode === 'practice') {
+		return `Create three practice questions from the current .enlearn learning content.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "questions": [
+    { "type": "translate", "prompt": "需要翻译的句子或中文提示" },
+    { "type": "cloze", "prompt": "I need to ____ my English reading speed." }
+  ]
+}
+
+Rules:
+- Return exactly 3 questions.
+- Allowed type values are "translate" and "cloze" only.
+- Do not include answers, hints, answer keys, explanations, or {answer|hint} cloze markers.
+- Cloze questions must use blanks such as ____ instead of revealing the answer.
+- Keep prompts directly related to the vocabulary, grammar, and sentences in the content.
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+.enlearn content:
+${text}`;
+	}
+
+	if (mode === 'gradePractice') {
+		return `Grade the selected learner answer using the current .enlearn learning content as context.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "grading": {
+    "correct": false,
+    "feedback": "一句中文反馈",
+    "correction": "可选的正确答案或修改建议",
+    "explanation": "如果错误，说明为什么错"
+  }
+}
+
+Rules:
+- Use Chinese feedback.
+- If the answer is correct or acceptable, set correct to true and keep feedback concise.
+- If the answer is wrong or unnatural, set correct to false, provide correction and explanation.
+- Do not rewrite the whole file.
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+${text}`;
+	}
+
 	const commonSchema = `Return valid json only, without markdown fences. Use this JSON shape:
 {
   "translation": "translation text",
@@ -1631,7 +2134,10 @@ ${text}`;
 		annotate: 'Create a study annotation for the selected text. Include translation, explanation, vocabulary, examples, and practice prompts.',
 		enlearn: 'Create content suitable for an .enlearn study block from the selected text. Include translation, explanation, vocabulary, examples, and practice prompts.',
 		summarize: 'Summarize this .enlearn learning content. Focus on core topics, key vocabulary, grammar and expressions, weak points, and concrete review suggestions.',
-		contextExplain: 'Explain the selected text only by using its sentence context. Focus on the selected text role, meaning, grammar reason, and why this form is used here. Return one concise Chinese explanation suitable for inline PS annotation.'
+		contextExplain: 'Explain the selected text only by using its sentence context. Focus on the selected text role, meaning, grammar reason, and why this form is used here. Return one concise Chinese explanation suitable for inline PS annotation.',
+		contextTranslate: 'Translate the selected word only by using its sentence context. Return one concise meaning for inline annotation.',
+		practice: 'Create three practice questions from this .enlearn learning content.',
+		gradePractice: 'Grade the selected learner answer from this .enlearn learning content.'
 	}[mode];
 
 	return `${task}
@@ -1657,6 +2163,8 @@ function parseAiLearningResult(content: string, sourceText: string): AiLearningR
 		examples: readStringArray(object.examples),
 		practice: readStringArray(object.practice),
 		vocabulary: readVocabulary(object.vocabulary),
+		questions: readPracticeQuestions(object.questions),
+		grading: readPracticeGrading(object.grading),
 		direction
 	};
 }
@@ -1771,6 +2279,57 @@ function toEnlearnBlock(sourceText: string, result: AiLearningResult, model: str
 	return `${lines.join('\n').replace(/\n{3,}/g, '\n\n')}\n`;
 }
 
+function formatPracticeBlock(questions: PracticeQuestion[], date: Date) {
+	const usableQuestions = questions
+		.filter(question => question.prompt.trim().length > 0)
+		.slice(0, 3);
+	if (usableQuestions.length === 0) {
+		return '';
+	}
+
+	const lines = [
+		`## Practice: AI Review ${formatLocalDate(date)}`,
+		''
+	];
+	for (const question of usableQuestions) {
+		const type = question.type === 'cloze' ? 'cloze' : 'translate';
+		lines.push(`? ${type} ${sanitizePracticePrompt(question.prompt)}`);
+	}
+
+	return `${lines.join('\n')}\n`;
+}
+
+function formatPracticeGrading(grading: PracticeGrading | undefined) {
+	if (!grading) {
+		return '';
+	}
+
+	const status = grading.correct ? '正确' : '错误';
+	const parts = [`! 批改：${status}。`];
+	if (grading.feedback) {
+		parts.push(grading.feedback);
+	}
+	if (!grading.correct && grading.correction) {
+		parts.push(`建议：${grading.correction}`);
+	}
+	if (!grading.correct && grading.explanation) {
+		parts.push(`原因：${grading.explanation}`);
+	}
+
+	return parts.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizePracticePrompt(value: string) {
+	return value
+		.replace(/^```json\s*/i, '')
+		.replace(/^```\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.replace(/^\s*\?\s*(?:translate|cloze)\b\s*/i, '')
+		.replace(/\{[^{}|]+(?:\|[^{}]+)?\}/g, '____')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
 async function saveLearningRecord(context: vscode.ExtensionContext, record: LearningRecord) {
 	const existing = context.globalState.get<LearningRecord[]>(LEARNING_RECORDS_KEY, []);
 	await context.globalState.update(LEARNING_RECORDS_KEY, [record, ...existing].slice(0, MAX_LEARNING_RECORDS));
@@ -1873,6 +2432,56 @@ function readVocabulary(value: unknown): VocabularyItem[] {
 			note: readString(object.note)
 		}];
 	});
+}
+
+function readPracticeQuestions(value: unknown): PracticeQuestion[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	return value.flatMap(item => {
+		if (!item || typeof item !== 'object' || Array.isArray(item)) {
+			return [];
+		}
+
+		const object = item as Record<string, unknown>;
+		const prompt = readString(object.prompt) ?? readString(object.question);
+		if (!prompt) {
+			return [];
+		}
+
+		return [{
+			type: readPracticeQuestionType(object.type),
+			prompt
+		}];
+	});
+}
+
+function readPracticeQuestionType(value: unknown): PracticeQuestionType {
+	return value === 'cloze' ? 'cloze' : 'translate';
+}
+
+function readPracticeGrading(value: unknown): PracticeGrading | undefined {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const object = value as Record<string, unknown>;
+	const correct = readBoolean(object.correct);
+	if (correct === undefined) {
+		return undefined;
+	}
+
+	return {
+		correct,
+		feedback: readString(object.feedback),
+		correction: readString(object.correction),
+		explanation: readString(object.explanation)
+	};
+}
+
+function readBoolean(value: unknown) {
+	return typeof value === 'boolean' ? value : undefined;
 }
 
 function readDirection(value: unknown): LearningDirection | undefined {

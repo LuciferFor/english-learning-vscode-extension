@@ -20,6 +20,7 @@ import {
 	parseRelatedWordsResult
 } from '../relatedWords';
 import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
+import { SIDEBAR_KEY_ICON_SIZE_PX } from '../extension';
 import {
 	DEFAULT_TTS_SETTINGS,
 	buildPowerShellMediaPlayerScript,
@@ -30,10 +31,19 @@ import {
 } from '../tts';
 import {
 	collectSentenceContext,
+	formatInlineTranslation,
 	formatPsExplanation,
 	getLineAfterSelections,
+	isSingleEnglishWord,
 	normalizeInsertedTranslation
 } from '../textInsertion';
+
+interface EnglishLearningTestExports {
+	setDeepSeekTestOverrides(overrides?: {
+		apiKey?: string;
+		requester?: (apiKey: string, mode: string, text: string) => Promise<unknown>;
+	}): void;
+}
 
 suite('English Learning Plugin extension', () => {
 	test('registers .enlearn language', async () => {
@@ -53,6 +63,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(commands.includes('englishLearning.annotateSelection'));
 		assert.ok(commands.includes('englishLearning.insertEnlearnBlock'));
 		assert.ok(commands.includes('englishLearning.summarizeLearningContent'));
+		assert.ok(commands.includes('englishLearning.practiceOrGradeSelection'));
 		assert.ok(commands.includes('englishLearning.generateRelatedWords'));
 		assert.ok(commands.includes('englishLearning.insertRelatedWord'));
 		assert.ok(commands.includes('englishLearning.playSelectionAudio'));
@@ -69,18 +80,20 @@ suite('English Learning Plugin extension', () => {
 			when: string;
 		}>;
 
-		assert.strictEqual(keybindings.length, 6);
+		assert.strictEqual(keybindings.length, 7);
 		assert.deepStrictEqual(keybindings.map(item => [item.key, item.command]), [
-			['ctrl+alt+q', 'englishLearning.explainSelection'],
-			['ctrl+alt+w', 'englishLearning.translateSelection'],
-			['ctrl+alt+e', 'englishLearning.summarizeLearningContent'],
-			['ctrl+alt+a', 'englishLearning.insertEnlearnBlock'],
-			['ctrl+alt+s', 'englishLearning.generateRelatedWords'],
-			['ctrl+alt+d', 'englishLearning.playSelectionAudio']
+			['ctrl+shift+alt+q', 'englishLearning.explainSelection'],
+			['ctrl+shift+alt+w', 'englishLearning.translateSelection'],
+			['ctrl+shift+alt+e', 'englishLearning.summarizeLearningContent'],
+			['ctrl+shift+alt+c', 'englishLearning.practiceOrGradeSelection'],
+			['ctrl+shift+alt+z', 'englishLearning.insertEnlearnBlock'],
+			['ctrl+shift+alt+x', 'englishLearning.generateRelatedWords'],
+			['ctrl+shift+alt+d', 'englishLearning.playSelectionAudio']
 		]);
 
 		for (const keybinding of keybindings) {
-			assert.ok(keybinding.when.includes('editorLangId == enlearn'));
+			assert.ok(keybinding.when.includes('resourceExtname == .enlearn'));
+			assert.ok(!keybinding.when.includes('editorLangId == enlearn'));
 		}
 	});
 
@@ -90,7 +103,9 @@ suite('English Learning Plugin extension', () => {
 
 		const contributes = extension.packageJSON.contributes;
 		assert.ok(contributes.viewsContainers.activitybar.some((item: { id: string }) => item.id === 'englishLearning'));
-		assert.ok(contributes.views.englishLearning.some((item: { id: string }) => item.id === 'englishLearning.actionsView'));
+		const actionsView = contributes.views.englishLearning.find((item: { id: string }) => item.id === 'englishLearning.actionsView');
+		assert.ok(actionsView);
+		assert.strictEqual(actionsView.type, 'webview');
 		assert.strictEqual(contributes.menus['view/title'], undefined);
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.generateRelatedWords'));
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.playSelectionAudio'));
@@ -101,23 +116,37 @@ suite('English Learning Plugin extension', () => {
 			'解释选中文本',
 			'中英互译',
 			'总结学习内容',
+			'练习/批改',
 			'插入学习块',
 			'生成相关词',
 			'播放发音'
 		]);
 		assert.deepStrictEqual(ENGLISH_LEARNING_ACTIONS.map(action => action.shortcut), [
-			'Ctrl+Alt+Q',
-			'Ctrl+Alt+W',
-			'Ctrl+Alt+E',
-			'Ctrl+Alt+A',
-			'Ctrl+Alt+S',
-			'Ctrl+Alt+D'
+			'Ctrl+Shift+Alt+Q',
+			'Ctrl+Shift+Alt+W',
+			'Ctrl+Shift+Alt+E',
+			'Ctrl+Shift+Alt+C',
+			'Ctrl+Shift+Alt+Z',
+			'Ctrl+Shift+Alt+X',
+			'Ctrl+Shift+Alt+D'
+		]);
+		assert.deepStrictEqual(ENGLISH_LEARNING_ACTIONS.map(action => action.iconPath), [
+			'resources/keys/key-q.png',
+			'resources/keys/key-w.png',
+			'resources/keys/key-e.png',
+			'resources/keys/key-c.png',
+			'resources/keys/key-z.png',
+			'resources/keys/key-x.png',
+			'resources/keys/key-d.png'
 		]);
 
 		for (const action of ENGLISH_LEARNING_ACTIONS) {
 			assert.ok(action.label.length <= 8);
-			assert.ok(action.shortcut.startsWith('Ctrl+Alt+'));
+			assert.ok(action.shortcut.startsWith('Ctrl+Shift+Alt+'));
+			assert.ok(action.iconPath.endsWith('.png'));
 		}
+
+		assert.ok(SIDEBAR_KEY_ICON_SIZE_PX >= 48);
 	});
 
 	test('contributes validation and highlighting settings', () => {
@@ -148,6 +177,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(properties['englishLearning.tts.maxTextLength']);
 		assert.strictEqual((properties['englishLearning.tts.voice'] as { default: string }).default, DEFAULT_TTS_SETTINGS.voice);
 		assert.strictEqual((properties['englishLearning.tts.lang'] as { default: string }).default, DEFAULT_TTS_SETTINGS.lang);
+		assert.strictEqual((properties['englishLearning.tts.volume'] as { default: string }).default, '+100%');
 		assert.strictEqual(configurationDefaults['[enlearn]']['editor.unicodeHighlight.ambiguousCharacters'], false);
 		assert.strictEqual((configurationDefaults['[enlearn]']['editor.unicodeHighlight.allowedCharacters'] as Record<string, boolean>)['；'], true);
 	});
@@ -198,6 +228,11 @@ suite('English Learning Plugin extension', () => {
 			endCharacter: 0
 		}]), 2);
 		assert.strictEqual(normalizeInsertedTranslation('\n我想学习英语。\n'), '我想学习英语。');
+		assert.strictEqual(isSingleEnglishWord('lesson'), true);
+		assert.strictEqual(isSingleEnglishWord("don't"), true);
+		assert.strictEqual(isSingleEnglishWord('reading-speed'), true);
+		assert.strictEqual(isSingleEnglishWord('one lesson'), false);
+		assert.strictEqual(formatInlineTranslation('（课程。）'), '(课程)');
 	});
 
 	test('collects sentence context and formats inline PS explanations', () => {
@@ -234,6 +269,343 @@ suite('English Learning Plugin extension', () => {
 			formatPsExplanation('（PS: an 是不定冠词，用于 apple 前。）'),
 			'（PS: an 是不定冠词，用于 apple 前。）'
 		);
+	});
+
+	test('explain command inserts inline PS after the sentence instead of replacing selected text', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'contextExplain');
+				assert.ok(text.includes('Selected text: an'));
+				assert.ok(text.includes('Sentence context:'));
+				assert.ok(text.includes('I want an apple.'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						explanation: 'an 用在 apple 前，因为 apple 以元音音素开头。',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I want an apple.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 7),
+				new vscode.Position(0, 9)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.explainSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I want an apple.（PS: an 用在 apple 前，因为 apple 以元音音素开头。）\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('translate command inserts word meaning inline for single-word selection', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'contextTranslate');
+				assert.ok(text.includes('Selected word: lesson'));
+				assert.ok(text.includes('I will learn one lesson per day.'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						translation: '课',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I will learn one lesson per day.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 17),
+				new vscode.Position(0, 23)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.translateSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I will learn one lesson(课) per day.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('translate command still inserts sentence translation on next line', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'translate');
+				assert.strictEqual(text, 'I can study every day.');
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						translation: '我每天都能学习。',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I can study every day.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 22)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.translateSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I can study every day.\n我每天都能学习。\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('practice command appends three unanswered questions without selection', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'practice');
+				assert.ok(text.includes('I can study every day.'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [
+							{ type: 'translate', prompt: '我每天都能学习。' },
+							{ type: 'cloze', prompt: 'I can ____ every day.' },
+							{ type: 'translate', prompt: 'I will learn one lesson per day.' }
+						],
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: '# Unit\n\n## Text\n> I can study every day.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 0)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			const text = document.getText();
+			assert.ok(text.includes('## Practice: AI Review '));
+			assert.ok(text.includes('? translate 我每天都能学习。'));
+			assert.ok(text.includes('? cloze I can ____ every day.'));
+			assert.ok(text.includes('? translate I will learn one lesson per day.'));
+			assert.ok(!text.includes('{'));
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('practice command inserts wrong-answer grading below selected answer', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'gradePractice');
+				assert.ok(text.includes('Learner answer:'));
+				assert.ok(text.includes('I studying every day.'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						grading: {
+							correct: false,
+							feedback: '动词形式不对。',
+							correction: 'I study every day.',
+							explanation: 'can 后应接动词原形，不能用 studying。'
+						},
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I studying every day.\nNext line.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 21)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I studying every day.\n! 批改：错误。 动词形式不对。 建议：I study every day. 原因：can 后应接动词原形，不能用 studying。\nNext line.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('practice command inserts correct-answer grading below selected answer', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode) => {
+				assert.strictEqual(mode, 'gradePractice');
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						grading: {
+							correct: true,
+							feedback: '答案自然，表达正确。'
+						},
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I study every day.\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(0, 0),
+				new vscode.Position(0, 18)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.practiceOrGradeSelection');
+
+			assert.strictEqual(
+				document.getText(),
+				'I study every day.\n! 批改：正确。 答案自然，表达正确。\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
 	});
 
 	test('extracts changed English segments for incremental AI validation', () => {
@@ -325,6 +697,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(script.includes('System.Windows.Media.MediaPlayer'));
 		assert.ok(script.includes("'C:\\tmp\\learner''s.mp3'"));
 		assert.ok(script.includes('Resolve-Path -LiteralPath'));
+		assert.ok(script.includes('$player.Volume = 1.0'));
 		assert.ok(script.includes('$player.Play()'));
 	});
 

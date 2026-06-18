@@ -2,18 +2,18 @@
   "name": "english-learning-plugin",
   "displayName": "英语学习插件",
   "description": "面向 VS Code 的 AI 英语学习工具。",
-  "version": "0.0.1",
+  "version": "0.0.12",
   "publisher": "luciferfor",
   "icon": "resources/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LuciferFor/----VS--.git"
+    "url": "https://github.com/LuciferFor/english-learning-vscode-extension.git"
   },
   "bugs": {
-    "url": "https://github.com/LuciferFor/----VS--/issues"
+    "url": "https://github.com/LuciferFor/english-learning-vscode-extension/issues"
   },
-  "homepage": "https://github.com/LuciferFor/----VS--#readme",
+  "homepage": "https://github.com/LuciferFor/english-learning-vscode-extension#readme",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -33,6 +33,7 @@
     "onCommand:englishLearning.annotateSelection",
     "onCommand:englishLearning.insertEnlearnBlock",
     "onCommand:englishLearning.summarizeLearningContent",
+    "onCommand:englishLearning.practiceOrGradeSelection",
     "onCommand:englishLearning.generateRelatedWords",
     "onCommand:englishLearning.insertRelatedWord",
     "onCommand:englishLearning.playSelectionAudio",
@@ -45,12 +46,12 @@
     "commands": [
       {
         "command": "englishLearning.translateSelection",
-        "title": "中英互译选中文本 (Ctrl+Alt+W)",
+        "title": "中英互译选中文本 (Ctrl+Shift+Alt+W)",
         "category": "英语学习插件"
       },
       {
         "command": "englishLearning.explainSelection",
-        "title": "解释选中文本 (Ctrl+Alt+Q)",
+        "title": "解释选中文本 (Ctrl+Shift+Alt+Q)",
         "category": "英语学习插件"
       },
       {
@@ -60,22 +61,27 @@
       },
       {
         "command": "englishLearning.insertEnlearnBlock",
-        "title": "插入 .enlearn 学习块 (Ctrl+Alt+A)",
+        "title": "插入 .enlearn 学习块 (Ctrl+Shift+Alt+Z)",
         "category": "英语学习插件"
       },
       {
         "command": "englishLearning.summarizeLearningContent",
-        "title": "总结学习内容 (Ctrl+Alt+E)",
+        "title": "总结学习内容 (Ctrl+Shift+Alt+E)",
+        "category": "英语学习插件"
+      },
+      {
+        "command": "englishLearning.practiceOrGradeSelection",
+        "title": "生成/批改练习 (Ctrl+Shift+Alt+C)",
         "category": "英语学习插件"
       },
       {
         "command": "englishLearning.generateRelatedWords",
-        "title": "生成相关词 (Ctrl+Alt+S)",
+        "title": "生成相关词 (Ctrl+Shift+Alt+X)",
         "category": "英语学习插件"
       },
       {
         "command": "englishLearning.playSelectionAudio",
-        "title": "播放发音 (Ctrl+Alt+D)",
+        "title": "播放发音 (Ctrl+Shift+Alt+D)",
         "category": "英语学习插件"
       },
       {
@@ -92,33 +98,38 @@
     "keybindings": [
       {
         "command": "englishLearning.explainSelection",
-        "key": "ctrl+alt+q",
-        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+q",
+        "when": "editorTextFocus && editorHasSelection && resourceExtname == .enlearn"
       },
       {
         "command": "englishLearning.translateSelection",
-        "key": "ctrl+alt+w",
-        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+w",
+        "when": "editorTextFocus && editorHasSelection && resourceExtname == .enlearn"
       },
       {
         "command": "englishLearning.summarizeLearningContent",
-        "key": "ctrl+alt+e",
-        "when": "editorTextFocus && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+e",
+        "when": "editorTextFocus && resourceExtname == .enlearn"
+      },
+      {
+        "command": "englishLearning.practiceOrGradeSelection",
+        "key": "ctrl+shift+alt+c",
+        "when": "editorTextFocus && resourceExtname == .enlearn"
       },
       {
         "command": "englishLearning.insertEnlearnBlock",
-        "key": "ctrl+alt+a",
-        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+z",
+        "when": "editorTextFocus && editorHasSelection && resourceExtname == .enlearn"
       },
       {
         "command": "englishLearning.generateRelatedWords",
-        "key": "ctrl+alt+s",
-        "when": "editorTextFocus && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+x",
+        "when": "editorTextFocus && resourceExtname == .enlearn"
       },
       {
         "command": "englishLearning.playSelectionAudio",
-        "key": "ctrl+alt+d",
-        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+        "key": "ctrl+shift+alt+d",
+        "when": "editorTextFocus && editorHasSelection && resourceExtname == .enlearn"
       }
     ],
     "menus": {
@@ -168,7 +179,8 @@
       "englishLearning": [
         {
           "id": "englishLearning.actionsView",
-          "name": "快捷操作"
+          "name": "快捷操作",
+          "type": "webview"
         }
       ]
     },
@@ -275,7 +287,7 @@
         },
         "englishLearning.tts.volume": {
           "type": "string",
-          "default": "+0%",
+          "default": "+100%",
           "description": "Speech volume used for pronunciation playback."
         },
         "englishLearning.tts.timeoutMs": {
