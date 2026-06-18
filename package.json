@@ -325,7 +325,25 @@
       "[enlearn]": {
         "editor.wordWrap": "on",
         "editor.autoClosingBrackets": "always",
-        "editor.bracketPairColorization.enabled": true
+        "editor.bracketPairColorization.enabled": true,
+        "editor.unicodeHighlight.ambiguousCharacters": false,
+        "editor.unicodeHighlight.allowedCharacters": {
+          "，": true,
+          "。": true,
+          "；": true,
+          "：": true,
+          "！": true,
+          "？": true,
+          "（": true,
+          "）": true,
+          "【": true,
+          "】": true,
+          "、": true,
+          "“": true,
+          "”": true,
+          "‘": true,
+          "’": true
+        }
       }
     }
   },

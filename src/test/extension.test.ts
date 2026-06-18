@@ -125,6 +125,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(extension);
 
 		const properties = extension.packageJSON.contributes.configuration.properties as Record<string, unknown>;
+		const configurationDefaults = extension.packageJSON.contributes.configurationDefaults as Record<string, Record<string, unknown>>;
 
 		assert.ok(properties['englishLearning.validation.enabled']);
 		assert.ok(properties['englishLearning.validation.ai.enabled']);
@@ -147,6 +148,8 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(properties['englishLearning.tts.maxTextLength']);
 		assert.strictEqual((properties['englishLearning.tts.voice'] as { default: string }).default, DEFAULT_TTS_SETTINGS.voice);
 		assert.strictEqual((properties['englishLearning.tts.lang'] as { default: string }).default, DEFAULT_TTS_SETTINGS.lang);
+		assert.strictEqual(configurationDefaults['[enlearn]']['editor.unicodeHighlight.ambiguousCharacters'], false);
+		assert.strictEqual((configurationDefaults['[enlearn]']['editor.unicodeHighlight.allowedCharacters'] as Record<string, boolean>)['；'], true);
 	});
 
 	test('matches English words, contractions, and hyphenated words', () => {
