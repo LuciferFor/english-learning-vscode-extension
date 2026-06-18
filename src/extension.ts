@@ -318,8 +318,8 @@ type EnglishLearningSidebarMessage = {
 	relatedIndex?: number;
 };
 
-export const SIDEBAR_KEY_ICON_SIZE_PX = 56;
-export const SIDEBAR_ACTION_ICON_SIZE_PX = 44;
+export const SIDEBAR_KEY_ICON_SIZE_PX = 48;
+export const SIDEBAR_ACTION_ICON_SIZE_PX = 40;
 
 class EnglishLearningSidebarProvider implements vscode.WebviewViewProvider {
 	private webviewView: vscode.WebviewView | undefined;
@@ -403,7 +403,7 @@ export function renderEnglishLearningSidebarHtml(
 		body {
 			box-sizing: border-box;
 			margin: 0;
-			padding: 10px;
+			padding: 8px;
 			color: var(--vscode-foreground);
 			background: var(--vscode-sideBar-background);
 			font-family: var(--vscode-font-family);
@@ -413,7 +413,7 @@ export function renderEnglishLearningSidebarHtml(
 		.actions {
 			display: flex;
 			flex-direction: column;
-			gap: 8px;
+			gap: 6px;
 		}
 
 		.action-card,
@@ -429,11 +429,11 @@ export function renderEnglishLearningSidebarHtml(
 
 		.action-card {
 			display: grid;
-			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 8}px ${SIDEBAR_ACTION_ICON_SIZE_PX}px minmax(0, 1fr);
+			grid-template-columns: ${SIDEBAR_KEY_ICON_SIZE_PX + 4}px ${SIDEBAR_ACTION_ICON_SIZE_PX}px minmax(0, 1fr);
 			align-items: center;
-			gap: 10px;
-			min-height: ${Math.max(SIDEBAR_KEY_ICON_SIZE_PX, SIDEBAR_ACTION_ICON_SIZE_PX) + 14}px;
-			padding: 6px 8px;
+			gap: 8px;
+			min-height: ${Math.max(SIDEBAR_KEY_ICON_SIZE_PX, SIDEBAR_ACTION_ICON_SIZE_PX) + 10}px;
+			padding: 5px 6px;
 		}
 
 		.action-card:hover,
@@ -464,6 +464,7 @@ export function renderEnglishLearningSidebarHtml(
 		}
 
 		.action-label {
+			display: block;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			white-space: nowrap;
@@ -473,6 +474,7 @@ export function renderEnglishLearningSidebarHtml(
 		}
 
 		.action-meta {
+			display: block;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			white-space: nowrap;
@@ -480,6 +482,10 @@ export function renderEnglishLearningSidebarHtml(
 			color: var(--vscode-descriptionForeground);
 			font-size: 12px;
 			line-height: 1.35;
+		}
+
+		.action-text {
+			min-width: 0;
 		}
 
 		.related-section {
@@ -555,7 +561,7 @@ function renderSidebarAction(webview: vscode.Webview, extensionUri: vscode.Uri, 
 	return `<button class="action-card" type="button" data-action-id="${escapeHtmlAttribute(action.id)}" title="${escapeHtmlAttribute(`${action.label}\n${action.shortcut} · ${status}`)}">
 		${icon}
 		${actionIcon}
-		<span>
+		<span class="action-text">
 			<span class="action-label">${escapeHtml(action.label)}</span>
 			<span class="action-meta">${escapeHtml(action.shortcut)} · ${escapeHtml(status)}</span>
 		</span>
