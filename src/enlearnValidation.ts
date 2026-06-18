@@ -54,8 +54,8 @@ export interface EnlearnCheckableSegment {
 	range: EnlearnTextRange;
 }
 
-const ENGLISH_WORD_PATTERN = /\b[A-Za-z]+(?:[-'][A-Za-z]+)*\b/g;
-const CHINESE_TEXT_PATTERN = /[\u3400-\u9fff]+(?:[，。！？、；：“”‘’（）《》\u3400-\u9fff]*)/gu;
+const ENGLISH_WORD_PATTERN = /\b[A-Za-z]+(?:[-'’][A-Za-z]+)*(?:[.,!?;:，。！？、；：…'"’”]+)?/g;
+const CHINESE_TEXT_PATTERN = /[\u3400-\u9fff]+(?:[\u3400-\u9fff，。！？、；：“”‘’（）《》.,!?;:…'"()]+)*/gu;
 const ALLOWED_VOCABULARY_FIELDS = new Set(['meaning', 'phonetic', 'example', 'note']);
 const BLOCKED_AI_LINE_PATTERN = /^\s*(?:=|@|\[word\]|\/\/|#)/;
 const CHECKABLE_PREFIX_PATTERNS = [

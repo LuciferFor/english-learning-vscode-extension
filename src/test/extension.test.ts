@@ -223,21 +223,25 @@ suite('English Learning Plugin extension', () => {
 	});
 
 	test('matches English words, contractions, and hyphenated words', () => {
-		const words = findEnglishWords("English words don't miss reading-speed.").map(match => match.text);
+		const words = findEnglishWords("English words don't miss reading-speed. don’t stop… word’").map(match => match.text);
 
-		assert.deepStrictEqual(words, ['English', 'words', "don't", 'miss', 'reading-speed']);
+		assert.deepStrictEqual(words, ['English', 'words', "don't", 'miss', 'reading-speed.', 'don’t', 'stop…', 'word’']);
 	});
 
 	test('matches Chinese text for orange highlighting', () => {
 		const matches = findChineseText([
 			'我想要学习英语',
 			'I need to improve my speaking.',
-			'= 我需要去改进我的口语。'
+			'= 我需要去改进我的口语。',
+			'! 回答: 文件存在,此函数返回 true.',
+			'中文省略…’'
 		].join('\n'));
 
-		assert.deepStrictEqual(matches.map(match => match.text), ['我想要学习英语', '我需要去改进我的口语。']);
+		assert.deepStrictEqual(matches.map(match => match.text), ['我想要学习英语', '我需要去改进我的口语。', '回答:', '文件存在,此函数返回', '中文省略…’']);
 		assert.strictEqual(matches[0].line, 0);
 		assert.strictEqual(matches[1].line, 2);
+		assert.strictEqual(matches[3].line, 3);
+		assert.strictEqual(matches[4].line, 4);
 	});
 
 	test('matches parenthetical notes and line comments for grey highlighting', () => {
