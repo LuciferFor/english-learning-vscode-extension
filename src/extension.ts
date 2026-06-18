@@ -57,10 +57,12 @@ const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
 const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
+export const ANSWER_CONTEXT_LINES = 3;
+export const ANSWER_MAX_ESTIMATED_TOKENS = 1000;
 const ASCII_PUNCTUATION_PROMPT_RULE = 'All punctuation in JSON string values must be ASCII punctuation only. Use , . : ; ? ! ( ) " \' instead of Chinese punctuation, even when the text is Chinese.';
 
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
-type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice' | 'gradePracticeBatch';
+type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice' | 'gradePracticeBatch' | 'answerQuestion';
 type LearningDirection = 'en-to-zh' | 'zh-to-en' | 'mixed';
 type PracticeQuestionType = 'translate' | 'cloze';
 
@@ -115,6 +117,7 @@ interface PracticeBatchFeedback {
 
 interface AiLearningResult {
 	translation?: string;
+	answer?: string;
 	explanation?: string;
 	summary?: string;
 	notes: string[];
@@ -178,6 +181,12 @@ interface PracticeOrGradeTarget {
 	selectedText: string;
 }
 
+interface AnswerQuestionTarget {
+	editor: vscode.TextEditor;
+	questionText: string;
+	promptText: string;
+}
+
 let outputChannel: vscode.OutputChannel;
 let enlearnDiagnosticCollection: vscode.DiagnosticCollection;
 let englishWordDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -219,6 +228,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('englishLearning.annotateSelection', () => runLearningCommand(context, 'annotate')),
 		vscode.commands.registerCommand('englishLearning.insertEnlearnBlock', () => insertEnlearnBlock(context)),
 		vscode.commands.registerCommand('englishLearning.summarizeLearningContent', () => summarizeLearningContent(context)),
+		vscode.commands.registerCommand('englishLearning.answerSelectedQuestion', () => answerSelectedQuestion(context)),
 		vscode.commands.registerCommand('englishLearning.practiceOrGradeSelection', () => practiceOrGradeSelection(context)),
 		vscode.commands.registerCommand('englishLearning.generateRelatedWords', () => generateRelatedWords(context, sidebarProvider)),
 		vscode.commands.registerCommand('englishLearning.insertRelatedWord', (item?: RelatedWord) => insertRelatedWord(item)),
@@ -1443,6 +1453,82 @@ function buildGradePracticeInput(answerText: string, documentText: string) {
 	].join('\n');
 }
 
+export function estimateAnswerQuestionTokens(text: string) {
+	const cjkCount = text.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+	const latinSegments = text.match(/[A-Za-z0-9_'-]+/gu) ?? [];
+	const latinChars = latinSegments.reduce((total, segment) => total + segment.length, 0);
+	const nonWhitespaceCount = text.replace(/\s+/g, '').length;
+	const otherCount = Math.max(0, nonWhitespaceCount - cjkCount - latinChars);
+
+	return Math.ceil(cjkCount + latinChars / 4 + otherCount / 2);
+}
+
+export function buildAnswerQuestionInput(documentText: string, questionText: string, selections: TextSelectionRange[], maxEstimatedTokens = ANSWER_MAX_ESTIMATED_TOKENS) {
+	const normalizedQuestion = questionText.trim();
+	if (!normalizedQuestion || estimateAnswerQuestionTokens(normalizedQuestion) > maxEstimatedTokens) {
+		return undefined;
+	}
+
+	const lines = documentText.split(/\r?\n/);
+	const touchedRange = getTouchedLineRange(selections);
+	let beforeLines = lines
+		.slice(Math.max(0, touchedRange.startLine - ANSWER_CONTEXT_LINES), touchedRange.startLine)
+		.map(line => line.trimEnd())
+		.filter(line => line.trim().length > 0);
+	let afterLines = lines
+		.slice(touchedRange.endLine + 1, Math.min(lines.length, touchedRange.endLine + 1 + ANSWER_CONTEXT_LINES))
+		.map(line => line.trimEnd())
+		.filter(line => line.trim().length > 0);
+
+	let input = formatAnswerQuestionInput(normalizedQuestion, beforeLines, afterLines);
+	while (estimateAnswerQuestionTokens(input) > maxEstimatedTokens && (beforeLines.length > 0 || afterLines.length > 0)) {
+		const beforeLength = beforeLines.join('\n').length;
+		const afterLength = afterLines.join('\n').length;
+		if (beforeLines.length > 0 && beforeLength >= afterLength) {
+			beforeLines = beforeLines.slice(1);
+		} else if (afterLines.length > 0) {
+			afterLines = afterLines.slice(0, -1);
+		} else {
+			beforeLines = beforeLines.slice(1);
+		}
+		input = formatAnswerQuestionInput(normalizedQuestion, beforeLines, afterLines);
+	}
+
+	return input;
+}
+
+function getTouchedLineRange(selections: TextSelectionRange[]) {
+	const startLine = Math.min(...selections.map(selection => selection.startLine));
+	const endLine = Math.max(...selections.map(selection => {
+		if (selection.endCharacter === 0 && selection.endLine > selection.startLine) {
+			return selection.endLine - 1;
+		}
+
+		return selection.endLine;
+	}));
+
+	return {
+		startLine,
+		endLine
+	};
+}
+
+function formatAnswerQuestionInput(questionText: string, beforeLines: string[], afterLines: string[]) {
+	const lines = [
+		'Selected question:',
+		questionText
+	];
+
+	if (beforeLines.length > 0) {
+		lines.push('', 'Context before:', ...beforeLines);
+	}
+	if (afterLines.length > 0) {
+		lines.push('', 'Context after:', ...afterLines);
+	}
+
+	return lines.join('\n');
+}
+
 function buildGradePracticeBatchInput(items: PracticeBatchItem[], documentText: string) {
 	return [
 		'Practice items JSON:',
@@ -1681,6 +1767,37 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 			});
 
 			await showMarkdownDocument(content);
+		} catch (error) {
+			handleCommandError(error);
+		}
+	});
+}
+
+async function answerSelectedQuestion(context: vscode.ExtensionContext) {
+	const target = getAnswerQuestionTarget();
+	if (!target) {
+		return;
+	}
+
+	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
+	if (!apiKey) {
+		return;
+	}
+
+	await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: 'English Learning Plugin: answering selected question',
+		cancellable: false
+	}, async () => {
+		try {
+			const response = await requestDeepSeek(apiKey, 'answerQuestion', target.promptText);
+			const answer = formatQuestionAnswer(response.result.answer);
+			if (!answer) {
+				vscode.window.showWarningMessage('DeepSeek did not return a usable answer.');
+				return;
+			}
+
+			await insertTextBelowSelections(target.editor, answer);
 		} catch (error) {
 			handleCommandError(error);
 		}
@@ -2259,6 +2376,40 @@ function getPracticeOrGradeTarget(): PracticeOrGradeTarget | undefined {
 	};
 }
 
+function getAnswerQuestionTarget(): AnswerQuestionTarget | undefined {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) {
+		vscode.window.showWarningMessage('Open a .enlearn editor first.');
+		return undefined;
+	}
+
+	const questionText = editor.selections
+		.map(selection => editor.document.getText(selection))
+		.filter(value => value.trim().length > 0)
+		.join('\n')
+		.trim();
+	if (!questionText) {
+		vscode.window.showWarningMessage('Select a question to answer first.');
+		return undefined;
+	}
+
+	const promptText = buildAnswerQuestionInput(
+		editor.document.getText(),
+		questionText,
+		editor.selections.map(toTextSelectionRange)
+	);
+	if (!promptText) {
+		vscode.window.showWarningMessage('Selected question is too long. Shorten the selection and try again.');
+		return undefined;
+	}
+
+	return {
+		editor,
+		questionText,
+		promptText
+	};
+}
+
 async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: string) {
 	if (testDeepSeekRequester) {
 		return testDeepSeekRequester(apiKey, mode, text);
@@ -2347,6 +2498,26 @@ Rules:
 - 只翻译 selected word 在 sentence context 里的意思。
 - 如果 selected word 是英文，只输出简短中文释义, 例如 "课", "课程"。
 - 不要翻译整句，不要解释语法，不要输出括号、标点、列表或 Markdown。
+- ${ASCII_PUNCTUATION_PROMPT_RULE}
+- The word "json" is intentionally included because the API JSON mode requires it.
+
+${text}`;
+	}
+
+	if (mode === 'answerQuestion') {
+		return `Answer the selected question using the nearby .enlearn context only as supporting context.
+
+Return valid json only, without markdown fences. Use this JSON shape:
+{
+  "answer": "一行中文回答, 可包含必要英文例句"
+}
+
+Rules:
+- Treat "Selected question" as the main question to answer.
+- Use Context before and Context after only when they help answer the question.
+- Answer in Chinese by default. If the question explicitly requests English, answer in English.
+- Keep the answer concise and directly useful for English learning.
+- Return one line only. Do not output Markdown, lists, or explanations outside answer.
 - ${ASCII_PUNCTUATION_PROMPT_RULE}
 - The word "json" is intentionally included because the API JSON mode requires it.
 
@@ -2459,6 +2630,7 @@ ${text}`;
 		summarize: 'Summarize this .enlearn learning content. Focus on core topics, key vocabulary, grammar and expressions, weak points, and concrete review suggestions.',
 		contextExplain: 'Explain the selected text only by using its sentence context. Focus on the selected text role, meaning, grammar reason, and why this form is used here. Return one concise Chinese explanation suitable for inline PS annotation.',
 		contextTranslate: 'Translate the selected word only by using its sentence context. Return one concise meaning for inline annotation.',
+		answerQuestion: 'Answer the selected question using nearby .enlearn context.',
 		practice: 'Create three practice questions from this .enlearn learning content.',
 		gradePractice: 'Grade the selected learner answer from this .enlearn learning content.',
 		gradePracticeBatch: 'Grade multiple selected learner answers from this .enlearn learning content.'
@@ -2481,6 +2653,7 @@ function parseAiLearningResult(content: string, sourceText: string): AiLearningR
 
 	return {
 		translation: readString(object.translation) ?? readString(object.translatedText),
+		answer: readString(object.answer),
 		explanation: readString(object.explanation),
 		summary: readString(object.summary),
 		notes: readStringArray(object.notes),
@@ -2643,6 +2816,26 @@ function formatPracticeGrading(grading: PracticeGrading | undefined) {
 	}
 
 	return normalizeAsciiPunctuation(parts.join(' ').replace(/\s+/g, ' ').trim());
+}
+
+export function formatQuestionAnswer(answer: string | undefined) {
+	if (!answer) {
+		return '';
+	}
+
+	const normalized = normalizeAsciiPunctuation(answer
+		.replace(/^```json\s*/i, '')
+		.replace(/^```\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.replace(/^\s*!\s*回答\s*[:：]\s*/u, '')
+		.split(/\r?\n/)
+		.map(line => line.trim())
+		.filter(line => line.length > 0)
+		.join(' ')
+		.replace(/\s+/g, ' ')
+		.trim());
+
+	return normalized ? `! 回答: ${normalized}` : '';
 }
 
 function formatUnansweredPracticeFeedback() {

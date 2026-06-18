@@ -25,6 +25,9 @@ import {
 } from '../relatedWords';
 import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
 import {
+	buildAnswerQuestionInput,
+	estimateAnswerQuestionTokens,
+	formatQuestionAnswer,
 	parsePracticeBatchItems,
 	SIDEBAR_ACTION_ICON_SIZE_PX,
 	SIDEBAR_KEY_ICON_SIZE_PX
@@ -71,6 +74,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(commands.includes('englishLearning.annotateSelection'));
 		assert.ok(commands.includes('englishLearning.insertEnlearnBlock'));
 		assert.ok(commands.includes('englishLearning.summarizeLearningContent'));
+		assert.ok(commands.includes('englishLearning.answerSelectedQuestion'));
 		assert.ok(commands.includes('englishLearning.practiceOrGradeSelection'));
 		assert.ok(commands.includes('englishLearning.generateRelatedWords'));
 		assert.ok(commands.includes('englishLearning.insertRelatedWord'));
@@ -88,11 +92,12 @@ suite('English Learning Plugin extension', () => {
 			when: string;
 		}>;
 
-		assert.strictEqual(keybindings.length, 7);
+		assert.strictEqual(keybindings.length, 8);
 		assert.deepStrictEqual(keybindings.map(item => [item.key, item.command]), [
 			['ctrl+shift+alt+q', 'englishLearning.explainSelection'],
 			['ctrl+shift+alt+w', 'englishLearning.translateSelection'],
 			['ctrl+shift+alt+e', 'englishLearning.summarizeLearningContent'],
+			['ctrl+shift+alt+a', 'englishLearning.answerSelectedQuestion'],
 			['ctrl+shift+alt+c', 'englishLearning.practiceOrGradeSelection'],
 			['ctrl+shift+alt+z', 'englishLearning.insertEnlearnBlock'],
 			['ctrl+shift+alt+x', 'englishLearning.generateRelatedWords'],
@@ -115,6 +120,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(actionsView);
 		assert.strictEqual(actionsView.type, 'webview');
 		assert.strictEqual(contributes.menus['view/title'], undefined);
+		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.answerSelectedQuestion'));
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.generateRelatedWords'));
 		assert.ok(contributes.menus['editor/context'].some((item: { command: string }) => item.command === 'englishLearning.playSelectionAudio'));
 	});
@@ -124,6 +130,7 @@ suite('English Learning Plugin extension', () => {
 			'解释选中文本',
 			'中英互译',
 			'总结学习内容',
+			'回答问题',
 			'练习/批改',
 			'插入学习块',
 			'生成相关词',
@@ -133,6 +140,7 @@ suite('English Learning Plugin extension', () => {
 			'Ctrl+Shift+Alt+Q',
 			'Ctrl+Shift+Alt+W',
 			'Ctrl+Shift+Alt+E',
+			'Ctrl+Shift+Alt+A',
 			'Ctrl+Shift+Alt+C',
 			'Ctrl+Shift+Alt+Z',
 			'Ctrl+Shift+Alt+X',
@@ -142,6 +150,7 @@ suite('English Learning Plugin extension', () => {
 			'resources/keys/key-q.png',
 			'resources/keys/key-w.png',
 			'resources/keys/key-e.png',
+			'resources/keys/key-a.png',
 			'resources/keys/key-c.png',
 			'resources/keys/key-z.png',
 			'resources/keys/key-x.png',
@@ -151,6 +160,7 @@ suite('English Learning Plugin extension', () => {
 			'resources/actions/action-explain.png',
 			'resources/actions/action-translate.png',
 			'resources/actions/action-summarize.png',
+			'resources/actions/action-answer.png',
 			'resources/actions/action-practice.png',
 			'resources/actions/action-block.png',
 			'resources/actions/action-related.png',
@@ -491,6 +501,144 @@ suite('English Learning Plugin extension', () => {
 			assert.strictEqual(
 				document.getText(),
 				'I can study every day.\n我每天都能学习.\n'
+			);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
+	});
+
+	test('builds answer-question context from selected question and nearby lines only', () => {
+		const documentText = [
+			'far before 0',
+			'near before 1',
+			'near before 2',
+			'near before 3',
+			'? Why do we use an before apple?',
+			'near after 1',
+			'near after 2',
+			'near after 3',
+			'far after 4'
+		].join('\n');
+
+		const input = buildAnswerQuestionInput(documentText, '? Why do we use an before apple?', [{
+			startLine: 4,
+			startCharacter: 0,
+			endLine: 4,
+			endCharacter: 32
+		}]);
+
+		assert.ok(input);
+		assert.ok(input.includes('Selected question:'));
+		assert.ok(input.includes('near before 1'));
+		assert.ok(input.includes('near before 2'));
+		assert.ok(input.includes('near before 3'));
+		assert.ok(input.includes('near after 1'));
+		assert.ok(input.includes('near after 2'));
+		assert.ok(input.includes('near after 3'));
+		assert.ok(!input.includes('far before 0'));
+		assert.ok(!input.includes('far after 4'));
+	});
+
+	test('answer-question context trims support lines and rejects oversized questions', () => {
+		const longContext = 'context '.repeat(200);
+		const trimmed = buildAnswerQuestionInput([
+			longContext,
+			'? Short question?',
+			longContext
+		].join('\n'), '? Short question?', [{
+			startLine: 1,
+			startCharacter: 0,
+			endLine: 1,
+			endCharacter: 17
+		}], 20);
+
+		assert.ok(trimmed);
+		assert.ok(trimmed.includes('? Short question?'));
+		assert.ok(!trimmed.includes(longContext));
+		assert.ok(estimateAnswerQuestionTokens('word '.repeat(5000)) > 1000);
+		assert.strictEqual(buildAnswerQuestionInput('word '.repeat(5000), 'word '.repeat(5000), [{
+			startLine: 0,
+			startCharacter: 0,
+			endLine: 0,
+			endCharacter: 10
+		}]), undefined);
+	});
+
+	test('formats question answers as one feedback line', () => {
+		assert.strictEqual(
+			formatQuestionAnswer('! 回答：因为 apple 以元音音素开头。\n所以用 an。'),
+			'! 回答: 因为 apple 以元音音素开头. 所以用 an.'
+		);
+	});
+
+	test('answer question command inserts AI answer below selected question', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'answerQuestion');
+				assert.ok(text.includes('Selected question:'));
+				assert.ok(text.includes('? Why do we use an before apple?'));
+				assert.ok(text.includes('I want an apple.'));
+				assert.ok(text.includes('apple starts with a vowel sound.'));
+				assert.ok(!text.includes('# Far header'));
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						answer: '因为 apple 以元音音素开头。\n所以用 an。',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						questions: [],
+						gradings: [],
+						direction: 'mixed'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: [
+					'# Far header',
+					'@topic Fruit',
+					'[word] apple',
+					'I want an apple.',
+					'? Why do we use an before apple?',
+					'apple starts with a vowel sound.'
+				].join('\n') + '\n',
+				language: 'enlearn'
+			});
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(4, 0),
+				new vscode.Position(4, 32)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.answerSelectedQuestion');
+
+			assert.strictEqual(
+				document.getText(),
+				[
+					'# Far header',
+					'@topic Fruit',
+					'[word] apple',
+					'I want an apple.',
+					'? Why do we use an before apple?',
+					'! 回答: 因为 apple 以元音音素开头. 所以用 an.',
+					'apple starts with a vowel sound.'
+				].join('\n') + '\n'
 			);
 		} finally {
 			exports.setDeepSeekTestOverrides();

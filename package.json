@@ -2,7 +2,7 @@
   "name": "english-learning-plugin",
   "displayName": "英语学习插件",
   "description": "面向 VS Code 的 AI 英语学习工具。",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "publisher": "luciferfor",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -33,6 +33,7 @@
     "onCommand:englishLearning.annotateSelection",
     "onCommand:englishLearning.insertEnlearnBlock",
     "onCommand:englishLearning.summarizeLearningContent",
+    "onCommand:englishLearning.answerSelectedQuestion",
     "onCommand:englishLearning.practiceOrGradeSelection",
     "onCommand:englishLearning.generateRelatedWords",
     "onCommand:englishLearning.insertRelatedWord",
@@ -67,6 +68,11 @@
       {
         "command": "englishLearning.summarizeLearningContent",
         "title": "总结学习内容 (Ctrl+Shift+Alt+E)",
+        "category": "英语学习插件"
+      },
+      {
+        "command": "englishLearning.answerSelectedQuestion",
+        "title": "回答选中问题 (Ctrl+Shift+Alt+A)",
         "category": "英语学习插件"
       },
       {
@@ -112,6 +118,11 @@
         "when": "editorTextFocus && resourceExtname == .enlearn"
       },
       {
+        "command": "englishLearning.answerSelectedQuestion",
+        "key": "ctrl+shift+alt+a",
+        "when": "editorTextFocus && editorHasSelection && resourceExtname == .enlearn"
+      },
+      {
         "command": "englishLearning.practiceOrGradeSelection",
         "key": "ctrl+shift+alt+c",
         "when": "editorTextFocus && resourceExtname == .enlearn"
@@ -145,24 +156,29 @@
           "group": "englishLearning@2"
         },
         {
-          "command": "englishLearning.annotateSelection",
-          "when": "editorHasSelection",
+          "command": "englishLearning.answerSelectedQuestion",
+          "when": "editorHasSelection && resourceExtname == .enlearn",
           "group": "englishLearning@3"
         },
         {
-          "command": "englishLearning.insertEnlearnBlock",
+          "command": "englishLearning.annotateSelection",
           "when": "editorHasSelection",
           "group": "englishLearning@4"
         },
         {
+          "command": "englishLearning.insertEnlearnBlock",
+          "when": "editorHasSelection",
+          "group": "englishLearning@5"
+        },
+        {
           "command": "englishLearning.generateRelatedWords",
           "when": "editorTextFocus && editorLangId == enlearn",
-          "group": "englishLearning@5"
+          "group": "englishLearning@6"
         },
         {
           "command": "englishLearning.playSelectionAudio",
           "when": "editorHasSelection && editorLangId == enlearn",
-          "group": "englishLearning@6"
+          "group": "englishLearning@7"
         }
       ]
     },

@@ -37,6 +37,15 @@ export const ENGLISH_LEARNING_ACTIONS: EnglishLearningAction[] = [
 		requiresSelection: false
 	},
 	{
+		id: 'answerSelectedQuestion',
+		label: '回答问题',
+		command: 'englishLearning.answerSelectedQuestion',
+		shortcut: 'Ctrl+Shift+Alt+A',
+		iconPath: 'resources/keys/key-a.png',
+		actionIconPath: 'resources/actions/action-answer.png',
+		requiresSelection: true
+	},
+	{
 		id: 'practiceOrGradeSelection',
 		label: '练习/批改',
 		command: 'englishLearning.practiceOrGradeSelection',
