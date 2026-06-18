@@ -8,6 +8,7 @@ import {
 	findFeedbackLines,
 	findQuestionLines,
 	hashText,
+	isPunctuationStyleIssue,
 	parseAiValidationIssues,
 	validateEnlearnFormatText
 } from '../enlearnValidation';
@@ -1016,6 +1017,29 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual(issues[0].segmentId, 'line-1-abc');
 		assert.strictEqual(issues[0].message, '语法错误:主谓不一致.');
 		assert.strictEqual(issues[0].suggestion, 'He goes');
+	});
+
+	test('ignores AI punctuation-style validation issues', () => {
+		assert.ok(isPunctuationStyleIssue(
+			'表达不自然: 标点符号使用不当: 中文句子中应使用中文逗号和句号, 但这里使用了英文逗号和句号.',
+			'! 回答: 英语是动作的承受者, 如 I want an apple 中的 an apple 就是宾语.',
+			'回答: 英语是动作的承受者, 如 I want an apple 中的 an apple 就是宾语.'
+		));
+
+		const issues = parseAiValidationIssues(JSON.stringify({
+			issues: [
+				{
+					segmentId: 'line-1-abc',
+					text: '! 回答: 英语是动作的承受者, 如 I want an apple 中的 an apple 就是宾语.',
+					kind: 'usage',
+					message: '表达不自然: 标点符号使用不当: 中文句子中应使用中文逗号和句号, 但这里使用了英文逗号和句号.',
+					suggestion: '回答: 英语是动作的承受者, 如 I want an apple 中的 an apple 就是宾语.',
+					severity: 'warning'
+				}
+			]
+		}));
+
+		assert.strictEqual(issues.length, 0);
 	});
 
 	test('parses and formats related words', () => {

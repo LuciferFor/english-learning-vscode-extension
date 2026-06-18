@@ -2,7 +2,7 @@
   "name": "english-learning-plugin",
   "displayName": "英语学习插件",
   "description": "面向 VS Code 的 AI 英语学习工具。",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "publisher": "luciferfor",
   "icon": "resources/icon.png",
   "license": "MIT",

@@ -285,6 +285,9 @@ export function parseAiValidationIssues(content: string): EnlearnValidationIssue
 		if (!message || !text) {
 			return [];
 		}
+		if (isPunctuationStyleIssue(message, text, readString(object.suggestion))) {
+			return [];
+		}
 
 		return [{
 			kind: readDiagnosticKind(object.kind) ?? 'grammar',
@@ -295,6 +298,14 @@ export function parseAiValidationIssues(content: string): EnlearnValidationIssue
 			suggestion: readString(object.suggestion)
 		}];
 	});
+}
+
+export function isPunctuationStyleIssue(message: string, text = '', suggestion = '') {
+	const normalized = `${message} ${text} ${suggestion}`.toLowerCase();
+	const mentionsPunctuation = /标点|逗号|句号|punctuation|comma|period|full stop/.test(normalized);
+	const mentionsStyle = /中文标点|英文标点|ascii|全角|半角|中文逗号|中文句号|英文逗号|英文句号/.test(normalized);
+
+	return mentionsPunctuation && mentionsStyle;
 }
 
 function extractLineSegment(lineText: string, line: number): EnlearnCheckableSegment | undefined {

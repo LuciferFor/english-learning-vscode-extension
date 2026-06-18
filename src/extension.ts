@@ -1205,6 +1205,7 @@ async function requestDeepSeekValidationIssues(apiKey: string, segments: Enlearn
 				content: `Check only these changed .enlearn English segments for spelling errors, grammar errors, wrong word usage, and unnatural expressions.
 
 Do not infer or report issues outside the provided segments. Ignore cloze hints like {answer|hint}. Report only real English learning issues.
+Do not report punctuation style issues. In this .enlearn format, ASCII punctuation is intentionally allowed and preferred even in Chinese text, including , and . instead of Chinese comma or full stop.
 
 Return valid json only. Use this JSON shape:
 {
