@@ -1,0 +1,54 @@
+{
+  "English Learning Plugin Unit": {
+    "prefix": "unit",
+    "body": [
+      "# Unit: ${1:Reading 01}",
+      "",
+      "@level ${2:B1}",
+      "@topic ${3:Daily Work}",
+      "@source ${4:manual}",
+      "@created ${CURRENT_YEAR}-${CURRENT_MONTH}-${CURRENT_DATE}",
+      "",
+      "## Text",
+      "> ${5:I need to improve my English reading speed.}",
+      "",
+      "## Translation",
+      "= ${6:我需要提高我的英语阅读速度。}",
+      "",
+      "## Vocabulary",
+      "[word] ${7:improve}",
+      ": meaning ${8:提高；改善}",
+      ": phonetic ${9:/imˈpruːv/}",
+      ": example ${10:I want to improve my speaking.}",
+      ": note ${11:常接 skill、ability、performance 等名词。}",
+      "",
+      "## Explanation",
+      "! ${12:improve 表示让某事变得更好，比 make better 更正式。}",
+      "",
+      "## Practice",
+      "? translate ${13:我需要提高我的英语阅读速度。}",
+      "? cloze ${14:I need to {improve|提高} my English reading speed.}"
+    ],
+    "description": "Insert a complete .enlearn study unit."
+  },
+  "Vocabulary Word": {
+    "prefix": "word",
+    "body": [
+      "[word] ${1:term}",
+      ": meaning ${2:meaning}",
+      ": phonetic ${3:/phonetic/}",
+      ": example ${4:example sentence}",
+      ": note ${5:usage note}"
+    ],
+    "description": "Insert a .enlearn vocabulary entry."
+  },
+  "Practice": {
+    "prefix": "practice",
+    "body": [
+      "## Practice",
+      "? translate ${1:sentence to translate}",
+      "? cloze ${2:I need to {improve|提高} my English.}"
+    ],
+    "description": "Insert .enlearn practice prompts."
+  }
+}

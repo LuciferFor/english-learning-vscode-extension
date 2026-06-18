@@ -1,0 +1,98 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "English Learning Plugin",
+  "scopeName": "source.enlearn",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#headings" },
+    { "include": "#metadata" },
+    { "include": "#sourceText" },
+    { "include": "#translation" },
+    { "include": "#vocabulary" },
+    { "include": "#field" },
+    { "include": "#annotation" },
+    { "include": "#practice" },
+    { "include": "#cloze" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.double-slash.enlearn",
+      "match": "^\\s*//.*$"
+    },
+    "headings": {
+      "name": "markup.heading.enlearn",
+      "match": "^\\s*(#{1,6})\\s+(.+)$",
+      "captures": {
+        "1": { "name": "punctuation.definition.heading.enlearn" },
+        "2": { "name": "entity.name.section.enlearn" }
+      }
+    },
+    "metadata": {
+      "name": "meta.metadata.enlearn",
+      "match": "^\\s*(@[A-Za-z][\\w-]*)(\\s+.*)?$",
+      "captures": {
+        "1": { "name": "keyword.control.metadata.enlearn" },
+        "2": { "name": "string.unquoted.metadata-value.enlearn" }
+      }
+    },
+    "sourceText": {
+      "name": "markup.quote.source-text.enlearn",
+      "match": "^\\s*(>)(\\s.*)?$",
+      "captures": {
+        "1": { "name": "punctuation.definition.quote.enlearn" },
+        "2": { "name": "string.quoted.source.enlearn" }
+      }
+    },
+    "translation": {
+      "name": "markup.inserted.translation.enlearn",
+      "match": "^\\s*(=)(\\s.*)?$",
+      "captures": {
+        "1": { "name": "keyword.operator.translation.enlearn" },
+        "2": { "name": "string.unquoted.translation.enlearn" }
+      }
+    },
+    "vocabulary": {
+      "name": "meta.vocabulary.enlearn",
+      "match": "^\\s*(\\[word\\])(\\s+.+)?$",
+      "captures": {
+        "1": { "name": "storage.type.word.enlearn" },
+        "2": { "name": "entity.name.word.enlearn" }
+      }
+    },
+    "field": {
+      "name": "meta.vocabulary-field.enlearn",
+      "match": "^\\s*(:\\s*)(meaning|phonetic|example|note)(\\b.*)?$",
+      "captures": {
+        "1": { "name": "punctuation.separator.key-value.enlearn" },
+        "2": { "name": "support.type.vocabulary-field.enlearn" },
+        "3": { "name": "string.unquoted.field-value.enlearn" }
+      }
+    },
+    "annotation": {
+      "name": "markup.changed.annotation.enlearn",
+      "match": "^\\s*(!)(\\s.*)?$",
+      "captures": {
+        "1": { "name": "keyword.operator.annotation.enlearn" },
+        "2": { "name": "string.unquoted.annotation.enlearn" }
+      }
+    },
+    "practice": {
+      "name": "meta.practice.enlearn",
+      "match": "^\\s*(\\?\\s*)(translate|cloze)(\\b.*)?$",
+      "captures": {
+        "1": { "name": "keyword.operator.practice.enlearn" },
+        "2": { "name": "support.function.practice-type.enlearn" },
+        "3": { "name": "string.unquoted.practice.enlearn" }
+      }
+    },
+    "cloze": {
+      "name": "meta.cloze.enlearn",
+      "match": "\\{([^|{}]+)(\\|)([^{}]+)\\}",
+      "captures": {
+        "1": { "name": "variable.parameter.answer.enlearn" },
+        "2": { "name": "punctuation.separator.cloze.enlearn" },
+        "3": { "name": "comment.hint.cloze.enlearn" }
+      }
+    }
+  }
+}

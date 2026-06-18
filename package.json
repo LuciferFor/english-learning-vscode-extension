@@ -1,0 +1,237 @@
+{
+  "name": "english-learning-plugin",
+  "displayName": "English Learning Plugin",
+  "description": "AI-powered English learning tools for VS Code.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:englishLearning.translateSelection",
+    "onCommand:englishLearning.explainSelection",
+    "onCommand:englishLearning.annotateSelection",
+    "onCommand:englishLearning.insertEnlearnBlock",
+    "onCommand:englishLearning.summarizeLearningContent",
+    "onCommand:englishLearning.setApiKey",
+    "onLanguage:enlearn"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "englishLearning.translateSelection",
+        "title": "Translate Selection",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.explainSelection",
+        "title": "Explain Selection",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.annotateSelection",
+        "title": "Annotate Selection",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.insertEnlearnBlock",
+        "title": "Insert .enlearn Learning Block",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.summarizeLearningContent",
+        "title": "Summarize Learning Content",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.setApiKey",
+        "title": "Set DeepSeek API Key",
+        "category": "English Learning Plugin"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "englishLearning.explainSelection",
+        "key": "ctrl+alt+q",
+        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+      },
+      {
+        "command": "englishLearning.translateSelection",
+        "key": "ctrl+alt+w",
+        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+      },
+      {
+        "command": "englishLearning.summarizeLearningContent",
+        "key": "ctrl+alt+e",
+        "when": "editorTextFocus && editorLangId == enlearn"
+      },
+      {
+        "command": "englishLearning.insertEnlearnBlock",
+        "key": "ctrl+alt+a",
+        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "englishLearning.translateSelection",
+          "when": "editorHasSelection",
+          "group": "englishLearning@1"
+        },
+        {
+          "command": "englishLearning.explainSelection",
+          "when": "editorHasSelection",
+          "group": "englishLearning@2"
+        },
+        {
+          "command": "englishLearning.annotateSelection",
+          "when": "editorHasSelection",
+          "group": "englishLearning@3"
+        },
+        {
+          "command": "englishLearning.insertEnlearnBlock",
+          "when": "editorHasSelection",
+          "group": "englishLearning@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "English Learning Plugin",
+      "properties": {
+        "englishLearning.deepseek.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "DeepSeek OpenAI-compatible API base URL."
+        },
+        "englishLearning.deepseek.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "description": "DeepSeek model used for translation, explanation, and .enlearn block generation."
+        },
+        "englishLearning.deepseek.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature for DeepSeek responses."
+        },
+        "englishLearning.validation.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable .enlearn format, spelling, usage, and grammar diagnostics."
+        },
+        "englishLearning.validation.ai.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use DeepSeek to check .enlearn English spelling, usage, and grammar diagnostics."
+        },
+        "englishLearning.validation.debounceMs": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 250,
+          "maximum": 10000,
+          "description": "Delay in milliseconds before revalidating .enlearn content after edits."
+        },
+        "englishLearning.highlight.englishWords.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight English words in .enlearn files with a fixed decoration color."
+        },
+        "englishLearning.highlight.englishWords.color": {
+          "type": "string",
+          "default": "#2F80ED",
+          "description": "Decoration color for English words in .enlearn files."
+        },
+        "englishLearning.prediction.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI inline English sentence predictions in .enlearn files."
+        },
+        "englishLearning.prediction.showTranslationHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Chinese translation for the latest inline prediction in hover."
+        },
+        "englishLearning.prediction.maxContextChars": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 200,
+          "maximum": 8000,
+          "description": "Maximum number of characters sent as context for .enlearn inline predictions."
+        },
+        "englishLearning.prediction.debounceMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Delay in milliseconds before requesting an AI inline prediction."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "enlearn",
+        "aliases": [
+          "English Learning Plugin",
+          "enlearn"
+        ],
+        "extensions": [
+          ".enlearn"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "enlearn",
+        "scopeName": "source.enlearn",
+        "path": "./syntaxes/enlearn.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "enlearn",
+        "path": "./snippets/enlearn.code-snippets"
+      }
+    ],
+    "configurationDefaults": {
+      "[enlearn]": {
+        "editor.wordWrap": "on",
+        "editor.autoClosingBrackets": "always",
+        "editor.bracketPairColorization.enabled": true
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "openai": "^6.44.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.39.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  }
+}
