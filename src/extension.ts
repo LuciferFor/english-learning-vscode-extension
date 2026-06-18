@@ -1,7 +1,11 @@
+import { ChildProcess, spawn } from 'node:child_process';
 import OpenAI from 'openai';
+import { EdgeTTS } from 'node-edge-tts';
 import * as vscode from 'vscode';
 import {
+	EnlearnCheckableSegment,
 	EnlearnValidationIssue,
+	extractCheckableEnglishSegments,
 	findEnglishWords,
 	parseAiValidationIssues,
 	validateEnlearnFormatText
@@ -12,6 +16,26 @@ import {
 	parsePredictionResult,
 	shouldTriggerPrediction
 } from './enlearnPrediction';
+import {
+	RelatedWord,
+	RelatedWordsResult,
+	formatRelatedWordBlock,
+	getEnglishWordAt,
+	normalizeRelatedWordInput,
+	parseRelatedWordsResult
+} from './relatedWords';
+import {
+	ENGLISH_LEARNING_ACTIONS,
+	EnglishLearningAction
+} from './sidebarActions';
+import {
+	DEFAULT_TTS_SETTINGS,
+	TtsSettings,
+	buildPowerShellMediaPlayerScript,
+	normalizeTtsText,
+	toTtsValidationMessage,
+	validateTtsText
+} from './tts';
 
 const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
@@ -74,19 +98,38 @@ interface PredictionCacheEntry {
 	hoverRange: vscode.Range;
 }
 
+interface AiValidationCacheEntry {
+	text: string;
+	issues: EnlearnValidationIssue[];
+}
+
+interface RelatedWordTarget {
+	editor: vscode.TextEditor;
+	word: string;
+	sourceUri: string;
+}
+
 let outputChannel: vscode.OutputChannel;
 let enlearnDiagnosticCollection: vscode.DiagnosticCollection;
 let englishWordDecorationType: vscode.TextEditorDecorationType | undefined;
 let missingValidationApiKeyNoticeShown = false;
 const validationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const validationSegmentSnapshots = new Map<string, Set<string>>();
+const dirtyValidationSegmentHashes = new Map<string, Set<string>>();
+const aiValidationCaches = new Map<string, Map<string, AiValidationCacheEntry>>();
 let latestPrediction: PredictionCacheEntry | undefined;
 const predictionCache = new Map<string, PredictionCacheEntry>();
+let activeAudioPlayback: ChildProcess | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel('English Learning Plugin');
 	enlearnDiagnosticCollection = vscode.languages.createDiagnosticCollection('english-learning-plugin');
+	const treeProvider = new EnglishLearningTreeProvider();
 	context.subscriptions.push(outputChannel);
 	context.subscriptions.push(enlearnDiagnosticCollection);
+	context.subscriptions.push(vscode.window.createTreeView('englishLearning.actionsView', {
+		treeDataProvider: treeProvider
+	}));
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('englishLearning.translateSelection', () => runLearningCommand(context, 'translate')),
@@ -94,6 +137,9 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('englishLearning.annotateSelection', () => runLearningCommand(context, 'annotate')),
 		vscode.commands.registerCommand('englishLearning.insertEnlearnBlock', () => insertEnlearnBlock(context)),
 		vscode.commands.registerCommand('englishLearning.summarizeLearningContent', () => summarizeLearningContent(context)),
+		vscode.commands.registerCommand('englishLearning.generateRelatedWords', () => generateRelatedWords(context, treeProvider)),
+		vscode.commands.registerCommand('englishLearning.insertRelatedWord', (item?: RelatedWord) => insertRelatedWord(item)),
+		vscode.commands.registerCommand('englishLearning.playSelectionAudio', () => playSelectionAudio(context)),
 		vscode.commands.registerCommand('englishLearning.setApiKey', () => setDeepSeekApiKey(context))
 	);
 
@@ -113,6 +159,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			updateEnglishWordHighlightsForDocument(event.document);
 			validateEnlearnLocalDocument(event.document);
+			markChangedValidationSegments(event.document);
 			scheduleEnlearnValidation(context, event.document);
 		}),
 		vscode.workspace.onDidSaveTextDocument(document => {
@@ -122,15 +169,20 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 		vscode.workspace.onDidOpenTextDocument(document => {
 			if (isEnlearnDocument(document)) {
-				void validateEnlearnDocument(context, document, true);
+				initializeValidationSegmentSnapshot(document);
+				void validateEnlearnDocument(context, document, false);
 			}
 		}),
 		vscode.workspace.onDidCloseTextDocument(document => {
-			const timer = validationTimers.get(document.uri.toString());
+			const key = document.uri.toString();
+			const timer = validationTimers.get(key);
 			if (timer) {
 				clearTimeout(timer);
 			}
-			validationTimers.delete(document.uri.toString());
+			validationTimers.delete(key);
+			validationSegmentSnapshots.delete(key);
+			dirtyValidationSegmentHashes.delete(key);
+			aiValidationCaches.delete(key);
 			enlearnDiagnosticCollection.delete(document.uri);
 		}),
 		vscode.workspace.onDidChangeConfiguration(event => {
@@ -142,7 +194,8 @@ export function activate(context: vscode.ExtensionContext) {
 			if (event.affectsConfiguration('englishLearning.validation')) {
 				for (const document of vscode.workspace.textDocuments) {
 					if (isEnlearnDocument(document)) {
-						void validateEnlearnDocument(context, document, true);
+						initializeValidationSegmentSnapshot(document);
+						void validateEnlearnDocument(context, document, false);
 					}
 				}
 			}
@@ -161,6 +214,7 @@ export function activate(context: vscode.ExtensionContext) {
 				englishWordDecorationType?.dispose();
 				predictionCache.clear();
 				latestPrediction = undefined;
+				stopActiveAudioPlayback();
 			}
 		}
 	);
@@ -169,12 +223,93 @@ export function activate(context: vscode.ExtensionContext) {
 	updateAllVisibleEnglishWordHighlights();
 	for (const document of vscode.workspace.textDocuments) {
 		if (isEnlearnDocument(document)) {
-			void validateEnlearnDocument(context, document, true);
+			initializeValidationSegmentSnapshot(document);
+			void validateEnlearnDocument(context, document, false);
 		}
 	}
 }
 
 export function deactivate() {}
+
+class EnglishLearningTreeProvider implements vscode.TreeDataProvider<EnglishLearningTreeItem> {
+	private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<EnglishLearningTreeItem | undefined>();
+	readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+	private relatedWordsResult: RelatedWordsResult | undefined;
+
+	setRelatedWordsResult(result: RelatedWordsResult) {
+		this.relatedWordsResult = result;
+		this.onDidChangeTreeDataEmitter.fire(undefined);
+	}
+
+	getTreeItem(element: EnglishLearningTreeItem) {
+		return element;
+	}
+
+	getChildren(element?: EnglishLearningTreeItem): EnglishLearningTreeItem[] {
+		if (element) {
+			return element.children;
+		}
+
+		const items = ENGLISH_LEARNING_ACTIONS.map(action => createActionTreeItem(action));
+		if (this.relatedWordsResult) {
+			items.push(createRelatedWordsRootItem(this.relatedWordsResult));
+		}
+
+		return items;
+	}
+}
+
+class EnglishLearningTreeItem extends vscode.TreeItem {
+	constructor(
+		label: string,
+		collapsibleState: vscode.TreeItemCollapsibleState,
+		readonly children: EnglishLearningTreeItem[] = []
+	) {
+		super(label, collapsibleState);
+	}
+}
+
+function createActionTreeItem(action: EnglishLearningAction) {
+	const item = new EnglishLearningTreeItem(action.label, vscode.TreeItemCollapsibleState.None);
+	item.id = `action.${action.id}`;
+	item.description = action.requiresSelection ? 'Selection required' : 'Selection or current file';
+	item.tooltip = `${action.label}\nShortcut: ${action.shortcut}`;
+	item.iconPath = new vscode.ThemeIcon('zap');
+	item.command = {
+		command: action.command,
+		title: action.label
+	};
+	return item;
+}
+
+function createRelatedWordsRootItem(result: RelatedWordsResult) {
+	const item = new EnglishLearningTreeItem(
+		`Related Words: ${result.source}`,
+		vscode.TreeItemCollapsibleState.Expanded,
+		result.words.map(createRelatedWordTreeItem)
+	);
+	item.id = `related.${result.source}`;
+	item.description = `${result.words.length} words`;
+	item.tooltip = 'Click a related word to insert it into the active .enlearn editor.';
+	item.iconPath = new vscode.ThemeIcon('symbol-keyword');
+	return item;
+}
+
+function createRelatedWordTreeItem(word: RelatedWord) {
+	const item = new EnglishLearningTreeItem(`${word.word} - ${word.meaning}`, vscode.TreeItemCollapsibleState.None);
+	item.id = `related.${word.word}.${word.meaning}`;
+	item.description = word.domain;
+	item.tooltip = [word.domain ? `Domain: ${word.domain}` : undefined, word.example ? `Example: ${word.example}` : undefined, word.note ? `Note: ${word.note}` : undefined]
+		.filter(Boolean)
+		.join('\n');
+	item.iconPath = new vscode.ThemeIcon('symbol-string');
+	item.command = {
+		command: 'englishLearning.insertRelatedWord',
+		title: 'Insert Related Word',
+		arguments: [word]
+	};
+	return item;
+}
 
 async function provideEnlearnInlineCompletions(
 	context: vscode.ExtensionContext,
@@ -433,14 +568,20 @@ async function validateEnlearnDocument(context: vscode.ExtensionContext, documen
 	const version = document.version;
 	const text = document.getText();
 	const issues = validateEnlearnFormatText(text);
+	const segments = extractCheckableEnglishSegments(text);
+	pruneAiValidationCache(document, segments);
+	const aiValidationEnabled = vscode.workspace.getConfiguration('englishLearning.validation.ai').get<boolean>('enabled', true);
 
-	if (includeAi && vscode.workspace.getConfiguration('englishLearning.validation.ai').get<boolean>('enabled', true)) {
+	if (includeAi && aiValidationEnabled) {
 		const apiKey = await context.secrets.get(DEEPSEEK_SECRET_KEY);
 		if (!apiKey) {
 			void showMissingValidationApiKeyNotice();
 		} else {
 			try {
-				issues.push(...await requestDeepSeekValidationIssues(apiKey, text));
+				const dirtySegments = getDirtyValidationSegments(document, segments);
+				if (dirtySegments.length > 0) {
+					await refreshAiValidationCache(document, apiKey, dirtySegments);
+				}
 			} catch (error) {
 				outputChannel.appendLine(`[${new Date().toISOString()}] AI validation failed: ${readErrorMessage(error) ?? String(error)}`);
 			}
@@ -451,7 +592,155 @@ async function validateEnlearnDocument(context: vscode.ExtensionContext, documen
 		return;
 	}
 
+	if (aiValidationEnabled) {
+		issues.push(...readCachedAiValidationIssues(document, segments));
+	}
 	enlearnDiagnosticCollection.set(document.uri, toDiagnostics(document, issues));
+}
+
+function initializeValidationSegmentSnapshot(document: vscode.TextDocument) {
+	const key = document.uri.toString();
+	const hashes = new Set(extractCheckableEnglishSegments(document.getText()).map(segment => segment.hash));
+	validationSegmentSnapshots.set(key, hashes);
+	dirtyValidationSegmentHashes.set(key, new Set());
+}
+
+function markChangedValidationSegments(document: vscode.TextDocument) {
+	const key = document.uri.toString();
+	const previousHashes = validationSegmentSnapshots.get(key) ?? new Set<string>();
+	const currentHashes = new Set(extractCheckableEnglishSegments(document.getText()).map(segment => segment.hash));
+	const dirtyHashes = dirtyValidationSegmentHashes.get(key) ?? new Set<string>();
+
+	for (const hash of currentHashes) {
+		if (!previousHashes.has(hash)) {
+			dirtyHashes.add(hash);
+		}
+	}
+
+	for (const hash of [...dirtyHashes]) {
+		if (!currentHashes.has(hash)) {
+			dirtyHashes.delete(hash);
+		}
+	}
+
+	validationSegmentSnapshots.set(key, currentHashes);
+	dirtyValidationSegmentHashes.set(key, dirtyHashes);
+}
+
+function getDirtyValidationSegments(document: vscode.TextDocument, segments: EnlearnCheckableSegment[]) {
+	const dirtyHashes = dirtyValidationSegmentHashes.get(document.uri.toString());
+	if (!dirtyHashes || dirtyHashes.size === 0) {
+		return [];
+	}
+
+	const seen = new Set<string>();
+	return segments.filter(segment => {
+		if (!dirtyHashes.has(segment.hash) || seen.has(segment.hash)) {
+			return false;
+		}
+
+		seen.add(segment.hash);
+		return true;
+	});
+}
+
+function pruneAiValidationCache(document: vscode.TextDocument, segments: EnlearnCheckableSegment[]) {
+	const cache = aiValidationCaches.get(document.uri.toString());
+	if (!cache) {
+		return;
+	}
+
+	const currentHashes = new Set(segments.map(segment => segment.hash));
+	for (const hash of cache.keys()) {
+		if (!currentHashes.has(hash)) {
+			cache.delete(hash);
+		}
+	}
+}
+
+async function refreshAiValidationCache(document: vscode.TextDocument, apiKey: string, segments: EnlearnCheckableSegment[]) {
+	const key = document.uri.toString();
+	const issues = await requestDeepSeekValidationIssues(apiKey, segments);
+	const issuesBySegmentId = groupIssuesBySegmentId(issues);
+	const cache = aiValidationCaches.get(key) ?? new Map<string, AiValidationCacheEntry>();
+	const dirtyHashes = dirtyValidationSegmentHashes.get(key) ?? new Set<string>();
+
+	for (const segment of segments) {
+		cache.set(segment.hash, {
+			text: segment.text,
+			issues: (issuesBySegmentId.get(segment.id) ?? []).map(stripIssueRange)
+		});
+		dirtyHashes.delete(segment.hash);
+	}
+
+	aiValidationCaches.set(key, cache);
+	dirtyValidationSegmentHashes.set(key, dirtyHashes);
+}
+
+function readCachedAiValidationIssues(document: vscode.TextDocument, segments: EnlearnCheckableSegment[]) {
+	const cache = aiValidationCaches.get(document.uri.toString());
+	if (!cache) {
+		return [];
+	}
+
+	return segments.flatMap(segment => {
+		const entry = cache.get(segment.hash);
+		if (!entry || entry.text !== segment.text) {
+			return [];
+		}
+
+		return entry.issues.map(issue => localizeAiIssue(segment, issue));
+	});
+}
+
+function groupIssuesBySegmentId(issues: EnlearnValidationIssue[]) {
+	const grouped = new Map<string, EnlearnValidationIssue[]>();
+	for (const issue of issues) {
+		if (!issue.segmentId) {
+			continue;
+		}
+
+		const existing = grouped.get(issue.segmentId) ?? [];
+		existing.push(issue);
+		grouped.set(issue.segmentId, existing);
+	}
+
+	return grouped;
+}
+
+function stripIssueRange(issue: EnlearnValidationIssue): EnlearnValidationIssue {
+	return {
+		kind: issue.kind,
+		message: issue.message,
+		severity: issue.severity,
+		text: issue.text,
+		suggestion: issue.suggestion,
+		segmentId: issue.segmentId
+	};
+}
+
+function localizeAiIssue(segment: EnlearnCheckableSegment, issue: EnlearnValidationIssue): EnlearnValidationIssue {
+	const text = issue.text?.trim();
+	if (text) {
+		const index = segment.text.indexOf(text);
+		if (index >= 0) {
+			return {
+				...issue,
+				segmentId: segment.id,
+				range: {
+					line: segment.range.line,
+					startCharacter: segment.range.startCharacter + index,
+					endCharacter: segment.range.startCharacter + index + text.length
+				}
+			};
+		}
+	}
+
+	return {
+		...issue,
+		segmentId: segment.id,
+		range: segment.range
+	};
 }
 
 async function showMissingValidationApiKeyNotice() {
@@ -470,8 +759,8 @@ async function showMissingValidationApiKeyNotice() {
 	}
 }
 
-async function requestDeepSeekValidationIssues(apiKey: string, text: string): Promise<EnlearnValidationIssue[]> {
-	if (!/[A-Za-z]/.test(text)) {
+async function requestDeepSeekValidationIssues(apiKey: string, segments: EnlearnCheckableSegment[]): Promise<EnlearnValidationIssue[]> {
+	if (segments.length === 0) {
 		return [];
 	}
 
@@ -492,14 +781,15 @@ async function requestDeepSeekValidationIssues(apiKey: string, text: string): Pr
 			},
 			{
 				role: 'user',
-				content: `Check this .enlearn document for English spelling errors, grammar errors, wrong word usage, and unnatural expressions.
+				content: `Check only these changed .enlearn English segments for spelling errors, grammar errors, wrong word usage, and unnatural expressions.
 
-Ignore .enlearn syntax markers such as #, ##, @key, >, =, [word], :, !, ?, {answer|hint}, and // comments. Report only real English learning issues.
+Do not infer or report issues outside the provided segments. Ignore cloze hints like {answer|hint}. Report only real English learning issues.
 
 Return valid json only. Use this JSON shape:
 {
   "issues": [
     {
+      "segmentId": "segment id from input",
       "text": "wrong text",
       "kind": "spelling | grammar | usage",
       "message": "语法错误：explain the issue in Chinese",
@@ -511,14 +801,35 @@ Return valid json only. Use this JSON shape:
 
 The word "json" is intentionally included because the API JSON mode requires it.
 
-Document:
-${text}`
+Segments:
+${JSON.stringify(segments.map(segment => ({
+	id: segment.id,
+	text: segment.text
+})), null, 2)}`
 			}
 		]
 	});
 
 	const content = completion.choices[0]?.message?.content;
-	return content ? parseAiValidationIssues(content) : [];
+	return content ? assignMissingSegmentIds(parseAiValidationIssues(content), segments) : [];
+}
+
+function assignMissingSegmentIds(issues: EnlearnValidationIssue[], segments: EnlearnCheckableSegment[]) {
+	return issues.flatMap(issue => {
+		if (issue.segmentId) {
+			return [issue];
+		}
+
+		if (!issue.text) {
+			return [];
+		}
+
+		const matchedSegment = segments.find(segment => segment.text.includes(issue.text ?? ''));
+		return matchedSegment ? [{
+			...issue,
+			segmentId: matchedSegment.id
+		}] : [];
+	});
 }
 
 function toDiagnostics(document: vscode.TextDocument, issues: EnlearnValidationIssue[]) {
@@ -708,6 +1019,298 @@ async function insertEnlearnBlock(context: vscode.ExtensionContext) {
 			handleCommandError(error);
 		}
 	});
+}
+
+async function generateRelatedWords(context: vscode.ExtensionContext, treeProvider: EnglishLearningTreeProvider) {
+	const target = getRelatedWordTarget();
+	if (!target) {
+		return;
+	}
+
+	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
+	if (!apiKey) {
+		return;
+	}
+
+	await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: `English Learning Plugin: generating related words for "${target.word}"`,
+		cancellable: false
+	}, async () => {
+		try {
+			const result = await requestDeepSeekRelatedWords(apiKey, target.word);
+			treeProvider.setRelatedWordsResult(result);
+			vscode.window.showInformationMessage(`Generated ${result.words.length} related words for "${result.source}".`);
+		} catch (error) {
+			handleCommandError(error);
+		}
+	});
+}
+
+async function insertRelatedWord(item: RelatedWord | undefined) {
+	if (!item) {
+		vscode.window.showWarningMessage('Generate related words first, then click a word in the English Learning sidebar.');
+		return;
+	}
+
+	const editor = vscode.window.activeTextEditor;
+	if (!editor || editor.document.languageId !== ENLEARN_LANGUAGE_ID) {
+		vscode.window.showWarningMessage('Open a .enlearn editor before inserting a related word.');
+		return;
+	}
+
+	const block = `${formatRelatedWordBlock(item)}\n`;
+	await editor.edit(editBuilder => {
+		if (editor.selection.isEmpty) {
+			editBuilder.insert(editor.selection.active, block);
+		} else {
+			editBuilder.replace(editor.selection, block);
+		}
+	});
+}
+
+function getRelatedWordTarget(): RelatedWordTarget | undefined {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) {
+		vscode.window.showWarningMessage('Open a .enlearn editor and place the cursor on an English word first.');
+		return undefined;
+	}
+
+	if (editor.document.languageId !== ENLEARN_LANGUAGE_ID) {
+		vscode.window.showWarningMessage('Related word generation is only active in .enlearn files.');
+		return undefined;
+	}
+
+	const selectedText = editor.selections
+		.map(selection => editor.document.getText(selection))
+		.filter(value => value.trim().length > 0)
+		.join('\n');
+	const selectedWord = normalizeRelatedWordInput(selectedText);
+	if (selectedWord) {
+		return {
+			editor,
+			word: selectedWord,
+			sourceUri: editor.document.uri.toString()
+		};
+	}
+
+	const position = editor.selection.active;
+	const lineText = editor.document.lineAt(position.line).text;
+	const word = getEnglishWordAt(lineText, position.character);
+	if (!word) {
+		vscode.window.showWarningMessage('Select one English word, or place the cursor on an English word.');
+		return undefined;
+	}
+
+	return {
+		editor,
+		word,
+		sourceUri: editor.document.uri.toString()
+	};
+}
+
+async function playSelectionAudio(context: vscode.ExtensionContext) {
+	const target = getSelectedTtsText();
+	if (!target) {
+		return;
+	}
+
+	const settings = getTtsSettings();
+	const validationError = validateTtsText(target, settings.maxTextLength);
+	if (validationError) {
+		vscode.window.showWarningMessage(toTtsValidationMessage(validationError, settings.maxTextLength));
+		return;
+	}
+
+	stopActiveAudioPlayback();
+	await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: 'English Learning Plugin: playing pronunciation',
+		cancellable: false
+	}, async () => {
+		let audioPath: string;
+		try {
+			audioPath = await generateTtsAudio(context, target, settings);
+		} catch (error) {
+			const message = `语音生成失败，请检查网络或稍后重试。${readErrorMessage(error) ? ` ${readErrorMessage(error)}` : ''}`;
+			outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+			vscode.window.showErrorMessage(message);
+			return;
+		}
+
+		try {
+			await playAudioFile(audioPath);
+		} catch (error) {
+			const message = `语音播放失败。${readErrorMessage(error) ? ` ${readErrorMessage(error)}` : ''}`;
+			outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+			vscode.window.showErrorMessage(message);
+		}
+	});
+}
+
+function getSelectedTtsText() {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) {
+		vscode.window.showWarningMessage('Open a .enlearn editor and select an English word or sentence first.');
+		return undefined;
+	}
+
+	if (editor.document.languageId !== ENLEARN_LANGUAGE_ID) {
+		vscode.window.showWarningMessage('Pronunciation playback is only active in .enlearn files.');
+		return undefined;
+	}
+
+	return normalizeTtsText(editor.selections.map(selection => editor.document.getText(selection)));
+}
+
+function getTtsSettings(): TtsSettings {
+	const config = vscode.workspace.getConfiguration('englishLearning.tts');
+
+	return {
+		voice: config.get<string>('voice')?.trim() || DEFAULT_TTS_SETTINGS.voice,
+		lang: config.get<string>('lang')?.trim() || DEFAULT_TTS_SETTINGS.lang,
+		rate: config.get<string>('rate')?.trim() || DEFAULT_TTS_SETTINGS.rate,
+		pitch: config.get<string>('pitch')?.trim() || DEFAULT_TTS_SETTINGS.pitch,
+		volume: config.get<string>('volume')?.trim() || DEFAULT_TTS_SETTINGS.volume,
+		timeoutMs: config.get<number>('timeoutMs') ?? DEFAULT_TTS_SETTINGS.timeoutMs,
+		maxTextLength: config.get<number>('maxTextLength') ?? DEFAULT_TTS_SETTINGS.maxTextLength
+	};
+}
+
+async function generateTtsAudio(context: vscode.ExtensionContext, text: string, settings: TtsSettings) {
+	const speechDirectory = vscode.Uri.joinPath(context.globalStorageUri, 'speech');
+	await vscode.workspace.fs.createDirectory(speechDirectory);
+	const audioUri = vscode.Uri.joinPath(speechDirectory, 'latest.mp3');
+	const tts = new EdgeTTS({
+		voice: settings.voice,
+		lang: settings.lang,
+		outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+		rate: settings.rate,
+		pitch: settings.pitch,
+		volume: settings.volume,
+		timeout: settings.timeoutMs
+	});
+
+	await tts.ttsPromise(text, audioUri.fsPath);
+	return audioUri.fsPath;
+}
+
+function playAudioFile(audioPath: string) {
+	return new Promise<void>((resolve, reject) => {
+		const child = spawn('powershell.exe', [
+			'-NoProfile',
+			'-ExecutionPolicy',
+			'Bypass',
+			'-Command',
+			buildPowerShellMediaPlayerScript(audioPath)
+		], {
+			windowsHide: true
+		});
+		activeAudioPlayback = child;
+		let stderr = '';
+
+		child.stderr?.on('data', chunk => {
+			stderr += chunk.toString();
+		});
+		child.on('error', error => {
+			if (activeAudioPlayback === child) {
+				activeAudioPlayback = undefined;
+			}
+			reject(error);
+		});
+		child.on('close', code => {
+			const isCurrentPlayback = activeAudioPlayback === child;
+			if (isCurrentPlayback) {
+				activeAudioPlayback = undefined;
+			}
+
+			if (!isCurrentPlayback || code === 0) {
+				resolve();
+				return;
+			}
+
+			reject(new Error(stderr.trim() || `PowerShell audio player exited with code ${code}.`));
+		});
+	});
+}
+
+function stopActiveAudioPlayback() {
+	const child = activeAudioPlayback;
+	activeAudioPlayback = undefined;
+	if (child && !child.killed) {
+		child.kill();
+	}
+}
+
+async function requestDeepSeekRelatedWords(apiKey: string, word: string): Promise<RelatedWordsResult> {
+	const options = getDeepSeekOptions();
+	const client = new OpenAI({
+		apiKey,
+		baseURL: options.baseUrl
+	});
+
+	let content: string | null | undefined;
+	try {
+		const completion = await client.chat.completions.create({
+			model: options.model,
+			temperature: 0.3,
+			response_format: { type: 'json_object' },
+			messages: [
+				{
+					role: 'system',
+					content: 'You generate concise English vocabulary study data for Chinese-speaking learners. Respond only with valid json.'
+				},
+				{
+					role: 'user',
+					content: `Generate exactly 5 English words from fields closely related to the source word.
+
+Rules:
+- Use words in a similar topic, usage domain, or collocation field.
+- Avoid returning the source word itself.
+- Keep examples natural and learner-friendly.
+- Meanings and notes should be Chinese.
+- Do not add markdown fences.
+
+Return valid json only:
+{
+  "source": "${word}",
+  "words": [
+    {
+      "word": "enhance",
+      "meaning": "提高；增强",
+      "domain": "能力提升",
+      "example": "This method can enhance your reading speed.",
+      "note": "比 improve 更强调增强效果。"
+    }
+  ]
+}
+
+The word "json" is intentionally included because the API JSON mode requires it.
+
+Source word:
+${word}`
+				}
+			]
+		});
+
+		content = completion.choices[0]?.message?.content;
+	} catch (error) {
+		throw new Error(toDeepSeekErrorMessage(error));
+	}
+
+	if (!content) {
+		throw new Error('DeepSeek returned an empty related-word response.');
+	}
+
+	const result = parseRelatedWordsResult(content);
+	if (!result) {
+		throw new Error('DeepSeek related-word response was not valid JSON in the expected shape.');
+	}
+
+	return {
+		source: result.source,
+		words: result.words.slice(0, 5)
+	};
 }
 
 async function setDeepSeekApiKey(context: vscode.ExtensionContext) {

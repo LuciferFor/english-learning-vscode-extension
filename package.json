@@ -15,7 +15,11 @@
     "onCommand:englishLearning.annotateSelection",
     "onCommand:englishLearning.insertEnlearnBlock",
     "onCommand:englishLearning.summarizeLearningContent",
+    "onCommand:englishLearning.generateRelatedWords",
+    "onCommand:englishLearning.insertRelatedWord",
+    "onCommand:englishLearning.playSelectionAudio",
     "onCommand:englishLearning.setApiKey",
+    "onView:englishLearning.actionsView",
     "onLanguage:enlearn"
   ],
   "main": "./dist/extension.js",
@@ -23,12 +27,12 @@
     "commands": [
       {
         "command": "englishLearning.translateSelection",
-        "title": "Translate Selection",
+        "title": "Translate Selection (Ctrl+Alt+W)",
         "category": "English Learning Plugin"
       },
       {
         "command": "englishLearning.explainSelection",
-        "title": "Explain Selection",
+        "title": "Explain Selection (Ctrl+Alt+Q)",
         "category": "English Learning Plugin"
       },
       {
@@ -38,12 +42,27 @@
       },
       {
         "command": "englishLearning.insertEnlearnBlock",
-        "title": "Insert .enlearn Learning Block",
+        "title": "Insert .enlearn Learning Block (Ctrl+Alt+A)",
         "category": "English Learning Plugin"
       },
       {
         "command": "englishLearning.summarizeLearningContent",
-        "title": "Summarize Learning Content",
+        "title": "Summarize Learning Content (Ctrl+Alt+E)",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.generateRelatedWords",
+        "title": "Generate Related Words (Ctrl+Alt+S)",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.playSelectionAudio",
+        "title": "Play Pronunciation (Ctrl+Alt+D)",
+        "category": "English Learning Plugin"
+      },
+      {
+        "command": "englishLearning.insertRelatedWord",
+        "title": "Insert Related Word",
         "category": "English Learning Plugin"
       },
       {
@@ -72,6 +91,16 @@
         "command": "englishLearning.insertEnlearnBlock",
         "key": "ctrl+alt+a",
         "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
+      },
+      {
+        "command": "englishLearning.generateRelatedWords",
+        "key": "ctrl+alt+s",
+        "when": "editorTextFocus && editorLangId == enlearn"
+      },
+      {
+        "command": "englishLearning.playSelectionAudio",
+        "key": "ctrl+alt+d",
+        "when": "editorTextFocus && editorHasSelection && editorLangId == enlearn"
       }
     ],
     "menus": {
@@ -95,6 +124,45 @@
           "command": "englishLearning.insertEnlearnBlock",
           "when": "editorHasSelection",
           "group": "englishLearning@4"
+        },
+        {
+          "command": "englishLearning.generateRelatedWords",
+          "when": "editorTextFocus && editorLangId == enlearn",
+          "group": "englishLearning@5"
+        },
+        {
+          "command": "englishLearning.playSelectionAudio",
+          "when": "editorHasSelection && editorLangId == enlearn",
+          "group": "englishLearning@6"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "englishLearning.generateRelatedWords",
+          "when": "view == englishLearning.actionsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "englishLearning.playSelectionAudio",
+          "when": "view == englishLearning.actionsView",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "englishLearning",
+          "title": "English Learning Plugin",
+          "icon": "./resources/english-learning.svg"
+        }
+      ]
+    },
+    "views": {
+      "englishLearning": [
+        {
+          "id": "englishLearning.actionsView",
+          "name": "English Learning Actions"
         }
       ]
     },
@@ -168,6 +236,45 @@
           "minimum": 0,
           "maximum": 5000,
           "description": "Delay in milliseconds before requesting an AI inline prediction."
+        },
+        "englishLearning.tts.voice": {
+          "type": "string",
+          "default": "en-GB-SoniaNeural",
+          "description": "Edge TTS voice used for pronunciation playback."
+        },
+        "englishLearning.tts.lang": {
+          "type": "string",
+          "default": "en-GB",
+          "description": "Language tag used for pronunciation playback."
+        },
+        "englishLearning.tts.rate": {
+          "type": "string",
+          "default": "+0%",
+          "description": "Speech rate used for pronunciation playback."
+        },
+        "englishLearning.tts.pitch": {
+          "type": "string",
+          "default": "+0Hz",
+          "description": "Speech pitch used for pronunciation playback."
+        },
+        "englishLearning.tts.volume": {
+          "type": "string",
+          "default": "+0%",
+          "description": "Speech volume used for pronunciation playback."
+        },
+        "englishLearning.tts.timeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "Timeout in milliseconds for Edge TTS pronunciation generation."
+        },
+        "englishLearning.tts.maxTextLength": {
+          "type": "number",
+          "default": 500,
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Maximum selected text length allowed for pronunciation playback."
         }
       }
     },
@@ -220,12 +327,14 @@
     "test": "vscode-test"
   },
   "dependencies": {
+    "node-edge-tts": "^1.2.10",
     "openai": "^6.44.0"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.125.0",
+    "@types/ws": "^8.18.1",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.28.1",

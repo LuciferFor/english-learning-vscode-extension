@@ -11,15 +11,21 @@ AI-powered English learning tools for VS Code.
 - Register the `.enlearn` language with built-in syntax highlighting and snippets.
 - Highlight English words in `.enlearn` files with a fixed blue decoration.
 - Report `.enlearn` format errors locally, and use DeepSeek for English spelling, usage, and grammar diagnostics when an API key is configured.
+- Run AI diagnostics incrementally for new or changed English segments, so unchanged old content is not resent on every validation pass.
 - Predict natural English sentence continuations in `.enlearn` files with inline ghost text and show the Chinese translation in hover.
+- Generate five related vocabulary words from the selected word or cursor word.
+- Play selected English words or sentences with Edge TTS British pronunciation.
+- Show an English Learning sidebar with action buttons and their shortcuts.
 
 ## Commands
 
-- `English Learning Plugin: Translate Selection`
-- `English Learning Plugin: Explain Selection`
+- `English Learning Plugin: Translate Selection (Ctrl+Alt+W)`
+- `English Learning Plugin: Explain Selection (Ctrl+Alt+Q)`
 - `English Learning Plugin: Annotate Selection`
-- `English Learning Plugin: Insert .enlearn Learning Block`
-- `English Learning Plugin: Summarize Learning Content`
+- `English Learning Plugin: Insert .enlearn Learning Block (Ctrl+Alt+A)`
+- `English Learning Plugin: Summarize Learning Content (Ctrl+Alt+E)`
+- `English Learning Plugin: Generate Related Words (Ctrl+Alt+S)`
+- `English Learning Plugin: Play Pronunciation (Ctrl+Alt+D)`
 - `English Learning Plugin: Set DeepSeek API Key`
 
 ## Keybindings
@@ -30,8 +36,23 @@ The default keybindings are active only in `.enlearn` files.
 - `Ctrl+Alt+W`: Translate selected content between Chinese and English.
 - `Ctrl+Alt+E`: Summarize selected content, or summarize the whole current `.enlearn` file when nothing is selected.
 - `Ctrl+Alt+A`: Insert an `.enlearn` learning block from selected content.
+- `Ctrl+Alt+S`: Generate five related vocabulary words from the selected word, or from the word under the cursor.
+- `Ctrl+Alt+D`: Play British pronunciation for the selected English word or sentence.
 
 If another extension uses the same shortcut in the same context, override the binding in VS Code Keyboard Shortcuts.
+
+## Sidebar
+
+The English Learning activity bar view lists the main actions with their shortcuts:
+
+- `Explain Selection (Ctrl+Alt+Q)`
+- `Translate Selection (Ctrl+Alt+W)`
+- `Summarize Content (Ctrl+Alt+E)`
+- `Insert .enlearn Block (Ctrl+Alt+A)`
+- `Generate Related Words (Ctrl+Alt+S)`
+- `Play Pronunciation (Ctrl+Alt+D)`
+
+After generating related words, the sidebar shows the five vocabulary results. Click a result to insert it as a `.enlearn` `[word]` block in the active editor.
 
 ## Settings
 
@@ -47,6 +68,17 @@ If another extension uses the same shortcut in the same context, override the bi
 - `englishLearning.prediction.showTranslationHover`: Show Chinese translation hover for the latest prediction. Defaults to `true`.
 - `englishLearning.prediction.maxContextChars`: Maximum context sent for predictions. Defaults to `1200`.
 - `englishLearning.prediction.debounceMs`: Delay before requesting inline predictions. Defaults to `800`.
+- `englishLearning.tts.voice`: Edge TTS voice for pronunciation playback. Defaults to `en-GB-SoniaNeural`.
+- `englishLearning.tts.lang`: TTS language tag. Defaults to `en-GB`.
+- `englishLearning.tts.rate`: TTS speech rate. Defaults to `+0%`.
+- `englishLearning.tts.pitch`: TTS speech pitch. Defaults to `+0Hz`.
+- `englishLearning.tts.volume`: TTS speech volume. Defaults to `+0%`.
+- `englishLearning.tts.timeoutMs`: TTS generation timeout. Defaults to `10000`.
+- `englishLearning.tts.maxTextLength`: Maximum selected text length for pronunciation playback. Defaults to `500`.
+
+## Pronunciation
+
+Pronunciation playback uses the `node-edge-tts` npm package and Microsoft Edge online TTS. It writes a temporary MP3 under VS Code extension global storage and plays it through Windows media APIs without opening an external player. It does not use your DeepSeek API key. The default voice is `en-GB-SoniaNeural`; set `englishLearning.tts.voice` to `en-GB-RyanNeural` if you prefer a male British voice.
 
 ## `.enlearn` Format
 

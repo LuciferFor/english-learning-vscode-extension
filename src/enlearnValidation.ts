@@ -13,6 +13,7 @@ export interface EnlearnValidationIssue {
 	severity: EnlearnDiagnosticSeverity;
 	text?: string;
 	suggestion?: string;
+	segmentId?: string;
 	range?: EnlearnTextRange;
 }
 
@@ -23,8 +24,22 @@ export interface EnglishWordMatch {
 	endCharacter: number;
 }
 
+export interface EnlearnCheckableSegment {
+	id: string;
+	text: string;
+	hash: string;
+	range: EnlearnTextRange;
+}
+
 const ENGLISH_WORD_PATTERN = /\b[A-Za-z]+(?:[-'][A-Za-z]+)*\b/g;
 const ALLOWED_VOCABULARY_FIELDS = new Set(['meaning', 'phonetic', 'example', 'note']);
+const BLOCKED_AI_LINE_PATTERN = /^\s*(?:=|@|\[word\]|\/\/|#)/;
+const CHECKABLE_PREFIX_PATTERNS = [
+	/^\s*>\s*/,
+	/^\s*!\s*/,
+	/^\s*:\s*example\b\s*/i,
+	/^\s*\?\s*(?:cloze|translate)\b\s*/i
+];
 
 export function findEnglishWords(text: string): EnglishWordMatch[] {
 	const matches: EnglishWordMatch[] = [];
@@ -45,6 +60,30 @@ export function findEnglishWords(text: string): EnglishWordMatch[] {
 	}
 
 	return matches;
+}
+
+export function extractCheckableEnglishSegments(text: string): EnlearnCheckableSegment[] {
+	const segments: EnlearnCheckableSegment[] = [];
+	const lines = text.split(/\r?\n/);
+
+	for (let line = 0; line < lines.length; line++) {
+		const segment = extractLineSegment(lines[line], line);
+		if (segment) {
+			segments.push(segment);
+		}
+	}
+
+	return segments;
+}
+
+export function hashText(text: string): string {
+	let hash = 2166136261;
+	for (let index = 0; index < text.length; index++) {
+		hash ^= text.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+
+	return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function validateEnlearnFormatText(text: string): EnlearnValidationIssue[] {
@@ -111,9 +150,53 @@ export function parseAiValidationIssues(content: string): EnlearnValidationIssue
 			message,
 			severity: readDiagnosticSeverity(object.severity) ?? 'error',
 			text,
+			segmentId: readString(object.segmentId),
 			suggestion: readString(object.suggestion)
 		}];
 	});
+}
+
+function extractLineSegment(lineText: string, line: number): EnlearnCheckableSegment | undefined {
+	if (BLOCKED_AI_LINE_PATTERN.test(lineText) || !/[A-Za-z]/.test(lineText)) {
+		return undefined;
+	}
+
+	const prefixLength = readCheckablePrefixLength(lineText);
+	const contentStartInRemainder = lineText.slice(prefixLength).search(/\S/);
+	if (contentStartInRemainder < 0) {
+		return undefined;
+	}
+
+	const startCharacter = prefixLength + contentStartInRemainder;
+	const rawContent = lineText.slice(startCharacter);
+	const text = rawContent.trimEnd();
+	if (!/[A-Za-z]/.test(text)) {
+		return undefined;
+	}
+
+	const hash = hashText(text);
+	return {
+		id: `line-${line}-${hash}`,
+		text,
+		hash,
+		range: {
+			line,
+			startCharacter,
+			endCharacter: startCharacter + text.length
+		}
+	};
+}
+
+function readCheckablePrefixLength(lineText: string) {
+	for (const pattern of CHECKABLE_PREFIX_PATTERNS) {
+		const match = pattern.exec(lineText);
+		if (match) {
+			return match[0].length;
+		}
+	}
+
+	const firstNonWhitespace = lineText.search(/\S/);
+	return firstNonWhitespace < 0 ? 0 : firstNonWhitespace;
 }
 
 function validateClozeSegments(lineText: string, line: number): EnlearnValidationIssue[] {
