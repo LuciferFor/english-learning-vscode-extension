@@ -2,7 +2,7 @@
   "name": "english-learning-plugin",
   "displayName": "英语学习插件",
   "description": "面向 VS Code 的 AI 英语学习工具。",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "publisher": "luciferfor",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "onCommand:englishLearning.insertRelatedWord",
     "onCommand:englishLearning.playSelectionAudio",
     "onCommand:englishLearning.setApiKey",
+    "onCommand:englishLearning.selectAiProvider",
     "onView:englishLearning.actionsView",
     "onLanguage:enlearn"
   ],
@@ -97,7 +98,12 @@
       },
       {
         "command": "englishLearning.setApiKey",
-        "title": "设置 DeepSeek API Key",
+        "title": "设置当前 AI Provider API Key",
+        "category": "英语学习插件"
+      },
+      {
+        "command": "englishLearning.selectAiProvider",
+        "title": "选择 AI Provider",
         "category": "英语学习插件"
       }
     ],
@@ -203,22 +209,107 @@
     "configuration": {
       "title": "英语学习插件",
       "properties": {
+        "englishLearning.ai.provider": {
+          "type": "string",
+          "default": "deepseek",
+          "enum": [
+            "deepseek",
+            "openai",
+            "openrouter",
+            "siliconflow",
+            "dashscope",
+            "volcengine",
+            "lmstudio",
+            "ollama",
+            "customOpenAICompatible"
+          ],
+          "description": "Current AI provider used by all English Learning Plugin AI features."
+        },
+        "englishLearning.ai.providers": {
+          "type": "object",
+          "default": {
+            "deepseek": {
+              "baseUrl": "https://api.deepseek.com",
+              "model": "deepseek-v4-flash",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": true
+            },
+            "openai": {
+              "baseUrl": "https://api.openai.com/v1",
+              "model": "gpt-4o-mini",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            },
+            "openrouter": {
+              "baseUrl": "https://openrouter.ai/api/v1",
+              "model": "openai/gpt-4o-mini",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            },
+            "siliconflow": {
+              "baseUrl": "https://api.siliconflow.cn/v1",
+              "model": "Qwen/Qwen2.5-7B-Instruct",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            },
+            "dashscope": {
+              "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "model": "qwen-plus",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            },
+            "volcengine": {
+              "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+              "model": "doubao-seed-1-6-flash",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            },
+            "lmstudio": {
+              "baseUrl": "http://localhost:1234/v1",
+              "model": "local-model",
+              "temperature": 0.2,
+              "requiresApiKey": false,
+              "disableThinking": false
+            },
+            "ollama": {
+              "baseUrl": "http://localhost:11434",
+              "model": "llama3.1",
+              "temperature": 0.2,
+              "requiresApiKey": false,
+              "disableThinking": false
+            },
+            "customOpenAICompatible": {
+              "baseUrl": "http://localhost:8000/v1",
+              "model": "custom-model",
+              "temperature": 0.2,
+              "requiresApiKey": true,
+              "disableThinking": false
+            }
+          },
+          "description": "AI provider overrides. Built-in provider ids support baseUrl, model, temperature, requiresApiKey, and disableThinking."
+        },
         "englishLearning.deepseek.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",
-          "description": "DeepSeek OpenAI-compatible API base URL."
+          "description": "Deprecated compatibility setting. Use englishLearning.ai.providers.deepseek.baseUrl instead."
         },
         "englishLearning.deepseek.model": {
           "type": "string",
           "default": "deepseek-v4-flash",
-          "description": "DeepSeek model used for AI learning features. Defaults to the fast non-reasoning model deepseek-v4-flash."
+          "description": "Deprecated compatibility setting. Use englishLearning.ai.providers.deepseek.model instead."
         },
         "englishLearning.deepseek.temperature": {
           "type": "number",
           "default": 0.2,
           "minimum": 0,
           "maximum": 2,
-          "description": "Sampling temperature for DeepSeek responses."
+          "description": "Deprecated compatibility setting. Use englishLearning.ai.providers.deepseek.temperature instead."
         },
         "englishLearning.validation.enabled": {
           "type": "boolean",
@@ -228,7 +319,7 @@
         "englishLearning.validation.ai.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Use DeepSeek to check .enlearn English spelling, usage, and grammar diagnostics."
+          "description": "Use the current AI provider to check .enlearn English spelling, usage, and grammar diagnostics."
         },
         "englishLearning.validation.debounceMs": {
           "type": "number",

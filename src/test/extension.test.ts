@@ -29,7 +29,10 @@ import {
 } from '../relatedWords';
 import { ENGLISH_LEARNING_ACTIONS } from '../sidebarActions';
 import {
+	AI_PROVIDER_DEFAULTS,
 	buildAnswerQuestionInput,
+	buildOllamaChatRequestBody,
+	buildOpenAiCompatibleChatParams,
 	estimateAnswerQuestionTokens,
 	formatQuestionAnswer,
 	parsePracticeBatchItems,
@@ -105,6 +108,7 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(commands.includes('englishLearning.insertRelatedWord'));
 		assert.ok(commands.includes('englishLearning.playSelectionAudio'));
 		assert.ok(commands.includes('englishLearning.setApiKey'));
+		assert.ok(commands.includes('englishLearning.selectAiProvider'));
 	});
 
 	test('contributes only .enlearn scoped default keybindings', () => {
@@ -355,6 +359,8 @@ suite('English Learning Plugin extension', () => {
 		const properties = extension.packageJSON.contributes.configuration.properties as Record<string, unknown>;
 		const configurationDefaults = extension.packageJSON.contributes.configurationDefaults as Record<string, Record<string, unknown>>;
 
+		assert.strictEqual((properties['englishLearning.ai.provider'] as { default: string }).default, 'deepseek');
+		assert.ok(properties['englishLearning.ai.providers']);
 		assert.ok(properties['englishLearning.validation.enabled']);
 		assert.ok(properties['englishLearning.validation.ai.enabled']);
 		assert.ok(properties['englishLearning.validation.debounceMs']);
@@ -388,6 +394,30 @@ suite('English Learning Plugin extension', () => {
 		assert.strictEqual((properties['englishLearning.tts.volume'] as { default: string }).default, '+100%');
 		assert.strictEqual(configurationDefaults['[enlearn]']['editor.unicodeHighlight.ambiguousCharacters'], false);
 		assert.strictEqual((configurationDefaults['[enlearn]']['editor.unicodeHighlight.allowedCharacters'] as Record<string, boolean>)['；'], true);
+	});
+
+	test('configures built-in AI providers and request payload differences', () => {
+		assert.strictEqual(AI_PROVIDER_DEFAULTS.deepseek.type, 'openaiCompatible');
+		assert.strictEqual(AI_PROVIDER_DEFAULTS.deepseek.disableThinking, true);
+		assert.strictEqual(AI_PROVIDER_DEFAULTS.ollama.type, 'ollama');
+		assert.strictEqual(AI_PROVIDER_DEFAULTS.ollama.requiresApiKey, false);
+		assert.strictEqual(AI_PROVIDER_DEFAULTS.lmstudio.requiresApiKey, false);
+
+		const request = {
+			systemPrompt: 'system json',
+			userPrompt: 'user json',
+			temperature: 0.1
+		};
+		const deepseekParams = buildOpenAiCompatibleChatParams(AI_PROVIDER_DEFAULTS.deepseek, request) as { thinking?: unknown };
+		const openaiParams = buildOpenAiCompatibleChatParams(AI_PROVIDER_DEFAULTS.openai, request) as { thinking?: unknown };
+		const ollamaBody = buildOllamaChatRequestBody(AI_PROVIDER_DEFAULTS.ollama, request);
+
+		assert.deepStrictEqual(deepseekParams.thinking, { type: 'disabled' });
+		assert.strictEqual(openaiParams.thinking, undefined);
+		assert.strictEqual(ollamaBody.model, AI_PROVIDER_DEFAULTS.ollama.model);
+		assert.strictEqual(ollamaBody.stream, false);
+		assert.strictEqual(ollamaBody.format, 'json');
+		assert.deepStrictEqual(ollamaBody.messages.map(message => message.role), ['system', 'user']);
 	});
 
 	test('matches English words, contractions, and hyphenated words', () => {

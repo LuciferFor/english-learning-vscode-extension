@@ -5,7 +5,7 @@
 ## 功能
 
 - 对选中的中英文内容做互译、解释、注解和学习块生成；单词互译会插入到词后，句子互译会插入到下一行，解释结果会以 `（PS: ...）` 插入到所在语句后。
-- DeepSeek API key 使用 VS Code SecretStorage 保存，不写入项目文件。
+- AI Provider API key 使用 VS Code SecretStorage 保存，不写入项目文件。
 - 注册 `.enlearn` 语言，内置语法高亮、片段、英文蓝色高亮和中文橙色高亮。
 - 本地检查 `.enlearn` 格式错误，并在配置 API key 后增量检查英文拼写、用词和语法。
 - 在 `.enlearn` 中提供英文续写预测，并用 hover 显示中文翻译。
@@ -26,7 +26,8 @@
 - `英语学习插件: 生成/批改练习 (Ctrl+Shift+Alt+C)`
 - `英语学习插件: 生成相关词 (Ctrl+Shift+Alt+X)`
 - `英语学习插件: 播放发音 (Ctrl+Shift+Alt+D)`
-- `英语学习插件: 设置 DeepSeek API Key`
+- `英语学习插件: 设置当前 AI Provider API Key`
+- `英语学习插件: 选择 AI Provider`
 
 ## 快捷键
 
@@ -60,12 +61,14 @@
 
 ## Settings
 
-- `englishLearning.deepseek.baseUrl`: DeepSeek OpenAI-compatible API base URL. Defaults to `https://api.deepseek.com`.
-- `englishLearning.deepseek.model`：DeepSeek 模型，默认 `deepseek-v4-flash`，走快速非推理模型。
-- 所有 DeepSeek 请求都会显式设置 `thinking.type = disabled`，不使用深度思考/推理模式。
-- `englishLearning.deepseek.temperature`: Sampling temperature. Defaults to `0.2`.
+- `englishLearning.ai.provider`: 当前 AI Provider，默认 `deepseek`。
+- `englishLearning.ai.providers`: 内置 Provider 覆盖配置，可修改 `baseUrl`、`model`、`temperature`、`requiresApiKey`、`disableThinking`。
+- 内置 Provider：`deepseek`、`openai`、`openrouter`、`siliconflow`、`dashscope`、`volcengine`、`lmstudio`、`ollama`、`customOpenAICompatible`。
+- DeepSeek 默认使用 `deepseek-v4-flash`，并显式设置 `thinking.type = disabled`；其他 Provider 默认不发送 DeepSeek 专属 `thinking` 字段。
+- Ollama 默认地址是 `http://localhost:11434`，LM Studio 默认地址是 `http://localhost:1234/v1`，这两个本地 Provider 默认不需要 API key。
+- `englishLearning.deepseek.baseUrl` / `model` / `temperature`: 旧版兼容配置，建议改用 `englishLearning.ai.providers.deepseek.*`。
 - `englishLearning.validation.enabled`: Enable `.enlearn` diagnostics. Defaults to `true`.
-- `englishLearning.validation.ai.enabled`: Use DeepSeek for spelling, usage, and grammar diagnostics. Defaults to `true`.
+- `englishLearning.validation.ai.enabled`: Use the current AI provider for spelling, usage, and grammar diagnostics. Defaults to `true`.
 - `englishLearning.validation.debounceMs`: Delay before AI validation after edits. Defaults to `1500`.
 - `englishLearning.highlight.englishWords.enabled`: Enable fixed-color English word highlighting. Defaults to `true`.
 - `englishLearning.highlight.englishWords.color`: English word decoration color. Defaults to `#2F80ED`.
@@ -85,7 +88,7 @@
 
 ## Pronunciation
 
-Pronunciation playback uses the `node-edge-tts` npm package and Microsoft Edge online TTS. It writes a temporary MP3 under VS Code extension global storage and plays it through Windows media APIs without opening an external player. It does not use your DeepSeek API key. The default voice is `en-GB-SoniaNeural`; set `englishLearning.tts.voice` to `en-GB-RyanNeural` if you prefer a male British voice.
+Pronunciation playback uses the `node-edge-tts` npm package and Microsoft Edge online TTS. It writes a temporary MP3 under VS Code extension global storage and plays it through Windows media APIs without opening an external player. It does not use your AI Provider API key. The default voice is `en-GB-SoniaNeural`; set `englishLearning.tts.voice` to `en-GB-RyanNeural` if you prefer a male British voice.
 
 ## `.enlearn` Format
 

@@ -55,18 +55,116 @@ import {
 } from './textInsertion';
 
 const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
+const AI_SECRET_KEY_PREFIX = 'englishLearning.ai.apiKey.';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
 const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
 const SUMMARY_FILE_SUFFIX = '.summary';
+const DEFAULT_AI_PROVIDER_ID = 'deepseek';
 export const ANSWER_CONTEXT_LINES = 3;
 export const ANSWER_MAX_ESTIMATED_TOKENS = 1000;
 const ASCII_PUNCTUATION_PROMPT_RULE = 'All punctuation in JSON string values must be ASCII punctuation only. Use , . : ; ? ! ( ) " \' instead of Chinese punctuation, even when the text is Chinese.';
 
+const BUILTIN_AI_PROVIDERS: Record<string, AiProviderConfig> = {
+	deepseek: {
+		id: 'deepseek',
+		name: 'DeepSeek',
+		type: 'openaiCompatible',
+		baseUrl: 'https://api.deepseek.com',
+		model: 'deepseek-v4-flash',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: true
+	},
+	openai: {
+		id: 'openai',
+		name: 'OpenAI',
+		type: 'openaiCompatible',
+		baseUrl: 'https://api.openai.com/v1',
+		model: 'gpt-4o-mini',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	},
+	openrouter: {
+		id: 'openrouter',
+		name: 'OpenRouter',
+		type: 'openaiCompatible',
+		baseUrl: 'https://openrouter.ai/api/v1',
+		model: 'openai/gpt-4o-mini',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	},
+	siliconflow: {
+		id: 'siliconflow',
+		name: 'SiliconFlow',
+		type: 'openaiCompatible',
+		baseUrl: 'https://api.siliconflow.cn/v1',
+		model: 'Qwen/Qwen2.5-7B-Instruct',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	},
+	dashscope: {
+		id: 'dashscope',
+		name: '通义千问/百炼',
+		type: 'openaiCompatible',
+		baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+		model: 'qwen-plus',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	},
+	volcengine: {
+		id: 'volcengine',
+		name: '火山方舟',
+		type: 'openaiCompatible',
+		baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+		model: 'doubao-seed-1-6-flash',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	},
+	lmstudio: {
+		id: 'lmstudio',
+		name: 'LM Studio',
+		type: 'openaiCompatible',
+		baseUrl: 'http://localhost:1234/v1',
+		model: 'local-model',
+		temperature: 0.2,
+		requiresApiKey: false,
+		disableThinking: false
+	},
+	ollama: {
+		id: 'ollama',
+		name: 'Ollama',
+		type: 'ollama',
+		baseUrl: 'http://localhost:11434',
+		model: 'llama3.1',
+		temperature: 0.2,
+		requiresApiKey: false,
+		disableThinking: false
+	},
+	customOpenAICompatible: {
+		id: 'customOpenAICompatible',
+		name: 'Custom OpenAI-Compatible',
+		type: 'openaiCompatible',
+		baseUrl: 'http://localhost:8000/v1',
+		model: 'custom-model',
+		temperature: 0.2,
+		requiresApiKey: true,
+		disableThinking: false
+	}
+};
+
+export const AI_PROVIDER_DEFAULTS = BUILTIN_AI_PROVIDERS;
+
 type LearningMode = 'translate' | 'explain' | 'annotate' | 'enlearn' | 'summarize';
-type DeepSeekRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice' | 'gradePracticeBatch' | 'answerQuestion';
+type AiRequestMode = LearningMode | 'contextExplain' | 'contextTranslate' | 'practice' | 'gradePractice' | 'gradePracticeBatch' | 'answerQuestion';
 type LearningDirection = 'en-to-zh' | 'zh-to-en' | 'mixed';
 type PracticeQuestionType = 'translate' | 'cloze';
+export type AiProviderType = 'openaiCompatible' | 'ollama';
 
 interface SelectedText {
 	editor: vscode.TextEditor;
@@ -76,7 +174,31 @@ interface SelectedText {
 	primarySelection: TextSelectionRange;
 }
 
-interface DeepSeekOptions {
+export interface AiProviderConfig {
+	id: string;
+	name: string;
+	type: AiProviderType;
+	baseUrl: string;
+	model: string;
+	temperature: number;
+	requiresApiKey: boolean;
+	disableThinking: boolean;
+}
+
+interface AiProviderAccess {
+	provider: AiProviderConfig;
+	apiKey?: string;
+}
+
+export interface AiJsonCompletionRequest {
+	systemPrompt: string;
+	userPrompt: string;
+	temperature: number;
+}
+
+interface AiOptions {
+	providerId: string;
+	providerName: string;
 	baseUrl: string;
 	model: string;
 	temperature: number;
@@ -135,12 +257,12 @@ interface AiLearningResult {
 	direction: LearningDirection;
 }
 
-interface DeepSeekResponse {
-	options: DeepSeekOptions;
+interface AiResponse {
+	options: AiOptions;
 	result: AiLearningResult;
 }
 
-type DeepSeekRequester = (apiKey: string, mode: DeepSeekRequestMode, text: string) => Promise<DeepSeekResponse>;
+type AiRequester = (apiKey: string, mode: AiRequestMode, text: string) => Promise<AiResponse>;
 
 interface LearningRecord {
 	id: string;
@@ -208,10 +330,14 @@ const aiValidationCaches = new Map<string, Map<string, AiValidationCacheEntry>>(
 let latestPrediction: PredictionCacheEntry | undefined;
 const predictionCache = new Map<string, PredictionCacheEntry>();
 let activeAudioPlayback: ChildProcess | undefined;
-let testDeepSeekApiKey: string | undefined;
-let testDeepSeekRequester: DeepSeekRequester | undefined;
+let testAiApiKey: string | undefined;
+let testAiRequester: AiRequester | undefined;
 
-function withDeepSeekNonThinking(params: ChatCompletionCreateParamsNonStreaming) {
+function withProviderChatParams(provider: AiProviderConfig, params: ChatCompletionCreateParamsNonStreaming) {
+	if (!provider.disableThinking) {
+		return params;
+	}
+
 	return {
 		...params,
 		thinking: {
@@ -239,7 +365,8 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('englishLearning.generateRelatedWords', () => generateRelatedWords(context, sidebarProvider)),
 		vscode.commands.registerCommand('englishLearning.insertRelatedWord', (item?: RelatedWord) => insertRelatedWord(item)),
 		vscode.commands.registerCommand('englishLearning.playSelectionAudio', () => playSelectionAudio(context)),
-		vscode.commands.registerCommand('englishLearning.setApiKey', () => setDeepSeekApiKey(context))
+		vscode.commands.registerCommand('englishLearning.setApiKey', () => setCurrentAiProviderApiKey(context)),
+		vscode.commands.registerCommand('englishLearning.selectAiProvider', () => selectAiProvider())
 	);
 
 	context.subscriptions.push(
@@ -340,10 +467,10 @@ export function deactivate() {}
 
 export function setDeepSeekTestOverrides(overrides?: {
 	apiKey?: string;
-	requester?: DeepSeekRequester;
+	requester?: AiRequester;
 }) {
-	testDeepSeekApiKey = overrides?.apiKey;
-	testDeepSeekRequester = overrides?.requester;
+	testAiApiKey = overrides?.apiKey;
+	testAiRequester = overrides?.requester;
 }
 
 type EnglishLearningSidebarMessage = {
@@ -670,8 +797,8 @@ async function provideEnlearnInlineCompletions(
 		return [];
 	}
 
-	const apiKey = await context.secrets.get(DEEPSEEK_SECRET_KEY);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessSilently(context);
+	if (!aiAccess) {
 		return [];
 	}
 
@@ -684,7 +811,7 @@ async function provideEnlearnInlineCompletions(
 	}
 
 	try {
-		const result = await requestDeepSeekPrediction(apiKey, document, position, maxContextChars);
+		const result = await requestAiPrediction(aiAccess, document, position, maxContextChars);
 		if (!result || token.isCancellationRequested) {
 			return [];
 		}
@@ -727,8 +854,8 @@ function providePredictionHover(document: vscode.TextDocument, position: vscode.
 	return new vscode.Hover(markdown, latestPrediction.hoverRange);
 }
 
-async function requestDeepSeekPrediction(
-	apiKey: string,
+async function requestAiPrediction(
+	aiAccess: AiProviderAccess,
 	document: vscode.TextDocument,
 	position: vscode.Position,
 	maxContextChars: number
@@ -737,24 +864,10 @@ async function requestDeepSeekPrediction(
 		line: position.line,
 		character: position.character
 	}, maxContextChars);
-	const options = getDeepSeekOptions();
-	const client = new OpenAI({
-		apiKey,
-		baseURL: options.baseUrl
-	});
-
-	const completion = await client.chat.completions.create(withDeepSeekNonThinking({
-		model: options.model,
+	const content = await requestAiJsonCompletion(aiAccess, {
 		temperature: 0.4,
-		response_format: { type: 'json_object' },
-		messages: [
-			{
-				role: 'system',
-				content: `You predict concise natural English continuations for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
-			},
-			{
-				role: 'user',
-				content: `Continue the English writing at the cursor in this .enlearn note.
+		systemPrompt: `You predict concise natural English continuations for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`,
+		userPrompt: `Continue the English writing at the cursor in this .enlearn note.
 
 Rules:
 - Return exactly one concise English continuation, one phrase or one sentence.
@@ -774,11 +887,8 @@ The word "json" is intentionally included because the API JSON mode requires it.
 
 Context before cursor:
 ${contextText}`
-			}
-		]
-	}));
+	});
 
-	const content = completion.choices[0]?.message?.content;
 	return content ? parsePredictionResult(content) : undefined;
 }
 
@@ -1000,14 +1110,14 @@ async function validateEnlearnDocument(context: vscode.ExtensionContext, documen
 	const aiValidationEnabled = vscode.workspace.getConfiguration('englishLearning.validation.ai').get<boolean>('enabled', true);
 
 	if (includeAi && aiValidationEnabled) {
-		const apiKey = await context.secrets.get(DEEPSEEK_SECRET_KEY);
-		if (!apiKey) {
+		const aiAccess = await getAiProviderAccessSilently(context);
+		if (!aiAccess) {
 			void showMissingValidationApiKeyNotice();
 		} else {
 			try {
 				const dirtySegments = getDirtyValidationSegments(document, segments);
 				if (dirtySegments.length > 0) {
-					await refreshAiValidationCache(document, apiKey, dirtySegments);
+					await refreshAiValidationCache(document, aiAccess, dirtySegments);
 				}
 			} catch (error) {
 				outputChannel.appendLine(`[${new Date().toISOString()}] AI validation failed: ${readErrorMessage(error) ?? String(error)}`);
@@ -1085,9 +1195,9 @@ function pruneAiValidationCache(document: vscode.TextDocument, segments: Enlearn
 	}
 }
 
-async function refreshAiValidationCache(document: vscode.TextDocument, apiKey: string, segments: EnlearnCheckableSegment[]) {
+async function refreshAiValidationCache(document: vscode.TextDocument, aiAccess: AiProviderAccess, segments: EnlearnCheckableSegment[]) {
 	const key = document.uri.toString();
-	const issues = await requestDeepSeekValidationIssues(apiKey, segments);
+	const issues = await requestAiValidationIssues(aiAccess, segments);
 	const issuesBySegmentId = groupIssuesBySegmentId(issues);
 	const cache = aiValidationCaches.get(key) ?? new Map<string, AiValidationCacheEntry>();
 	const dirtyHashes = dirtyValidationSegmentHashes.get(key) ?? new Set<string>();
@@ -1176,8 +1286,9 @@ async function showMissingValidationApiKeyNotice() {
 	}
 
 	missingValidationApiKeyNoticeShown = true;
+	const provider = getCurrentAiProviderConfig();
 	const action = await vscode.window.showInformationMessage(
-		'DeepSeek API key is not set. .enlearn local format diagnostics are active; set a key to enable AI spelling and grammar diagnostics.',
+		`${provider.name} API key is not set. .enlearn local format diagnostics are active; set a key to enable AI spelling and grammar diagnostics.`,
 		'Set API Key'
 	);
 
@@ -1186,29 +1297,15 @@ async function showMissingValidationApiKeyNotice() {
 	}
 }
 
-async function requestDeepSeekValidationIssues(apiKey: string, segments: EnlearnCheckableSegment[]): Promise<EnlearnValidationIssue[]> {
+async function requestAiValidationIssues(aiAccess: AiProviderAccess, segments: EnlearnCheckableSegment[]): Promise<EnlearnValidationIssue[]> {
 	if (segments.length === 0) {
 		return [];
 	}
 
-	const options = getDeepSeekOptions();
-	const client = new OpenAI({
-		apiKey,
-		baseURL: options.baseUrl
-	});
-
-	const completion = await client.chat.completions.create(withDeepSeekNonThinking({
-		model: options.model,
+	const content = await requestAiJsonCompletion(aiAccess, {
 		temperature: 0,
-		response_format: { type: 'json_object' },
-		messages: [
-			{
-				role: 'system',
-				content: `You are an English spelling, grammar, and usage checker for .enlearn study notes. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
-			},
-			{
-				role: 'user',
-				content: `Check only these changed .enlearn English segments for spelling errors, grammar errors, wrong word usage, and unnatural expressions.
+		systemPrompt: `You are an English spelling, grammar, and usage checker for .enlearn study notes. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`,
+		userPrompt: `Check only these changed .enlearn English segments for spelling errors, grammar errors, wrong word usage, and unnatural expressions.
 
 Do not infer or report issues outside the provided segments. Ignore cloze hints like {answer|hint}. Report only real English learning issues.
 Do not report punctuation style issues. In this .enlearn format, ASCII punctuation is intentionally allowed and preferred even in Chinese text, including , and . instead of Chinese comma or full stop.
@@ -1235,11 +1332,8 @@ ${JSON.stringify(segments.map(segment => ({
 	id: segment.id,
 	text: segment.text
 })), null, 2)}`
-			}
-		]
-	}));
+	});
 
-	const content = completion.choices[0]?.message?.content;
 	return content ? assignMissingSegmentIds(parseAiValidationIssues(content), segments) : [];
 }
 
@@ -1323,8 +1417,8 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1338,8 +1432,8 @@ async function runLearningCommand(context: vscode.ExtensionContext, mode: Exclud
 			const inlineTranslation = mode === 'translate' && selected.selections.length === 1
 				? getInlineTranslationTarget(selected.editor, selected.primarySelection)
 				: undefined;
-			const response = await requestDeepSeek(
-				apiKey,
+			const response = await requestAi(
+				aiAccess,
 				mode === 'explain' ? 'contextExplain' : inlineTranslation ? 'contextTranslate' : mode,
 				contextExplanation
 					? buildContextExplainInput(selected.text, contextExplanation.text)
@@ -1629,7 +1723,7 @@ function isPracticeAnswerLine(value: string) {
 async function insertPsExplanationAfterSentence(editor: vscode.TextEditor, sentenceEndLine: number, explanation: string | undefined) {
 	const value = formatPsExplanation(explanation ?? '');
 	if (!value) {
-		vscode.window.showWarningMessage('DeepSeek did not return a usable explanation.');
+		vscode.window.showWarningMessage('AI provider did not return a usable explanation.');
 		return;
 	}
 
@@ -1643,7 +1737,7 @@ async function insertPsExplanationAfterSentence(editor: vscode.TextEditor, sente
 async function insertInlineTranslation(editor: vscode.TextEditor, position: vscode.Position, translation: string | undefined) {
 	const value = formatInlineTranslation(translation ?? '');
 	if (!value) {
-		vscode.window.showWarningMessage('DeepSeek did not return a usable word translation.');
+		vscode.window.showWarningMessage('AI provider did not return a usable word translation.');
 		return;
 	}
 
@@ -1655,7 +1749,7 @@ async function insertInlineTranslation(editor: vscode.TextEditor, position: vsco
 async function insertTranslationBelowSelection(editor: vscode.TextEditor, translation: string | undefined, selections: TextSelectionRange[]) {
 	const value = normalizeInsertedTranslation(translation ?? '');
 	if (!value) {
-		vscode.window.showWarningMessage('DeepSeek did not return translation text.');
+		vscode.window.showWarningMessage('AI provider did not return translation text.');
 		return;
 	}
 
@@ -1739,8 +1833,8 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1750,7 +1844,7 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(apiKey, 'summarize', target.text);
+			const response = await requestAi(aiAccess, 'summarize', target.text);
 			const content = toMarkdown('summarize', target.text, response.result, response.options.model);
 
 			await saveLearningRecord(context, {
@@ -1779,8 +1873,8 @@ async function answerSelectedQuestion(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1790,10 +1884,10 @@ async function answerSelectedQuestion(context: vscode.ExtensionContext) {
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(apiKey, 'answerQuestion', target.promptText);
+			const response = await requestAi(aiAccess, 'answerQuestion', target.promptText);
 			const answer = formatQuestionAnswer(response.result.answer);
 			if (!answer) {
-				vscode.window.showWarningMessage('DeepSeek did not return a usable answer.');
+				vscode.window.showWarningMessage('AI provider did not return a usable answer.');
 				return;
 			}
 
@@ -1818,8 +1912,8 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1829,8 +1923,8 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(
-				apiKey,
+			const response = await requestAi(
+				aiAccess,
 				hasAnswer ? 'gradePractice' : 'practice',
 				hasAnswer
 					? buildGradePracticeInput(target.selectedText, target.documentText)
@@ -1840,7 +1934,7 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 			if (hasAnswer) {
 				const feedback = formatPracticeGrading(response.result.grading);
 				if (!feedback) {
-					vscode.window.showWarningMessage('DeepSeek did not return usable grading feedback.');
+					vscode.window.showWarningMessage('AI provider did not return usable grading feedback.');
 					return;
 				}
 
@@ -1850,7 +1944,7 @@ async function practiceOrGradeSelection(context: vscode.ExtensionContext) {
 
 			const block = formatPracticeBlock(response.result.questions, new Date());
 			if (!block) {
-				vscode.window.showWarningMessage('DeepSeek did not return usable practice questions.');
+				vscode.window.showWarningMessage('AI provider did not return usable practice questions.');
 				return;
 			}
 
@@ -1871,8 +1965,8 @@ async function gradePracticeBatch(context: vscode.ExtensionContext, target: Prac
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1882,7 +1976,7 @@ async function gradePracticeBatch(context: vscode.ExtensionContext, target: Prac
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(apiKey, 'gradePracticeBatch', buildGradePracticeBatchInput(answeredItems, target.documentText));
+			const response = await requestAi(aiAccess, 'gradePracticeBatch', buildGradePracticeBatchInput(answeredItems, target.documentText));
 			const gradingById = new Map(response.result.gradings.map(grading => [grading.id, grading]));
 			const feedbacks = batchItems.map(item => {
 				if (!item.answer.trim()) {
@@ -1894,7 +1988,7 @@ async function gradePracticeBatch(context: vscode.ExtensionContext, target: Prac
 
 				return {
 					item,
-					feedback: formatPracticeGrading(gradingById.get(item.id)) || '! 批改: 无法批改. DeepSeek 未返回此题结果.'
+					feedback: formatPracticeGrading(gradingById.get(item.id)) || '! 批改: 无法批改. AI provider 未返回此题结果.'
 				};
 			});
 
@@ -1911,8 +2005,8 @@ async function insertEnlearnBlock(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1922,7 +2016,7 @@ async function insertEnlearnBlock(context: vscode.ExtensionContext) {
 		cancellable: false
 	}, async () => {
 		try {
-			const response = await requestDeepSeek(apiKey, 'enlearn', selected.text);
+			const response = await requestAi(aiAccess, 'enlearn', selected.text);
 			const block = toEnlearnBlock(selected.text, response.result, response.options.model);
 
 			await saveLearningRecord(context, {
@@ -1958,8 +2052,8 @@ async function generateRelatedWords(context: vscode.ExtensionContext, sidebarPro
 		return;
 	}
 
-	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
-	if (!apiKey) {
+	const aiAccess = await getAiProviderAccessOrPrompt(context);
+	if (!aiAccess) {
 		return;
 	}
 
@@ -1969,7 +2063,7 @@ async function generateRelatedWords(context: vscode.ExtensionContext, sidebarPro
 		cancellable: false
 	}, async () => {
 		try {
-			const result = await requestDeepSeekRelatedWords(apiKey, target.word);
+			const result = await requestAiRelatedWords(aiAccess, target.word);
 			sidebarProvider.setRelatedWordsResult(result);
 			vscode.window.showInformationMessage(`Generated ${result.words.length} related words for "${result.source}".`);
 		} catch (error) {
@@ -2186,27 +2280,13 @@ function stopActiveAudioPlayback() {
 	}
 }
 
-async function requestDeepSeekRelatedWords(apiKey: string, word: string): Promise<RelatedWordsResult> {
-	const options = getDeepSeekOptions();
-	const client = new OpenAI({
-		apiKey,
-		baseURL: options.baseUrl
-	});
-
-	let content: string | null | undefined;
+async function requestAiRelatedWords(aiAccess: AiProviderAccess, word: string): Promise<RelatedWordsResult> {
+	let content: string | undefined;
 	try {
-		const completion = await client.chat.completions.create(withDeepSeekNonThinking({
-			model: options.model,
+		content = await requestAiJsonCompletion(aiAccess, {
 			temperature: 0.3,
-			response_format: { type: 'json_object' },
-			messages: [
-				{
-					role: 'system',
-					content: `You generate concise English vocabulary study data for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`
-				},
-				{
-					role: 'user',
-					content: `Generate exactly 5 English words from fields closely related to the source word.
+			systemPrompt: `You generate concise English vocabulary study data for Chinese-speaking learners. Respond only with valid json. ${ASCII_PUNCTUATION_PROMPT_RULE}`,
+			userPrompt: `Generate exactly 5 English words from fields closely related to the source word.
 
 Rules:
 - Use words in a similar topic, usage domain, or collocation field.
@@ -2234,22 +2314,18 @@ The word "json" is intentionally included because the API JSON mode requires it.
 
 Source word:
 ${word}`
-				}
-			]
-		}));
-
-		content = completion.choices[0]?.message?.content;
+		});
 	} catch (error) {
-		throw new Error(toDeepSeekErrorMessage(error));
+		throw new Error(toAiErrorMessage(error, aiAccess.provider));
 	}
 
 	if (!content) {
-		throw new Error('DeepSeek returned an empty related-word response.');
+		throw new Error('AI provider returned an empty related-word response.');
 	}
 
 	const result = parseRelatedWordsResult(content);
 	if (!result) {
-		throw new Error('DeepSeek related-word response was not valid JSON in the expected shape.');
+		throw new Error('AI provider related-word response was not valid JSON in the expected shape.');
 	}
 
 	return {
@@ -2258,10 +2334,39 @@ ${word}`
 	};
 }
 
-async function setDeepSeekApiKey(context: vscode.ExtensionContext) {
+async function selectAiProvider() {
+	const currentProvider = getCurrentAiProviderConfig();
+	const picked = await vscode.window.showQuickPick(
+		Object.values(BUILTIN_AI_PROVIDERS).map(provider => ({
+			label: provider.name,
+			description: provider.id === currentProvider.id ? 'current' : provider.id,
+			detail: `${provider.type} | ${provider.baseUrl} | ${provider.model}${provider.requiresApiKey ? ' | API key required' : ' | local/no key'}`,
+			provider
+		})),
+		{
+			title: 'Select AI Provider',
+			placeHolder: 'Choose the AI provider used by all English Learning Plugin AI features'
+		}
+	);
+
+	if (!picked) {
+		return;
+	}
+
+	await vscode.workspace.getConfiguration('englishLearning.ai').update('provider', picked.provider.id, vscode.ConfigurationTarget.Global);
+	vscode.window.showInformationMessage(`AI Provider switched to ${picked.provider.name}.`);
+}
+
+async function setCurrentAiProviderApiKey(context: vscode.ExtensionContext) {
+	const provider = getCurrentAiProviderConfig();
+	if (!provider.requiresApiKey) {
+		vscode.window.showInformationMessage(`${provider.name} does not require an API key.`);
+		return true;
+	}
+
 	const apiKey = await vscode.window.showInputBox({
-		title: 'Set DeepSeek API Key',
-		prompt: 'Paste your DeepSeek API key. It will be stored in VS Code SecretStorage, not in project files.',
+		title: `Set ${provider.name} API Key`,
+		prompt: `Paste your ${provider.name} API key. It will be stored in VS Code SecretStorage, not in project files.`,
 		password: true,
 		ignoreFocusOut: true,
 		placeHolder: 'sk-...'
@@ -2271,23 +2376,28 @@ async function setDeepSeekApiKey(context: vscode.ExtensionContext) {
 		return false;
 	}
 
-	await context.secrets.store(DEEPSEEK_SECRET_KEY, apiKey.trim());
-	vscode.window.showInformationMessage('DeepSeek API key saved in VS Code SecretStorage.');
+	await context.secrets.store(toAiSecretKey(provider.id), apiKey.trim());
+	vscode.window.showInformationMessage(`${provider.name} API key saved in VS Code SecretStorage.`);
 	return true;
 }
 
-async function getDeepSeekApiKeyOrPrompt(context: vscode.ExtensionContext) {
-	if (testDeepSeekApiKey) {
-		return testDeepSeekApiKey;
+async function getAiProviderAccessOrPrompt(context: vscode.ExtensionContext) {
+	const provider = getCurrentAiProviderConfig();
+	if (!provider.requiresApiKey) {
+		return { provider };
 	}
 
-	const existing = await context.secrets.get(DEEPSEEK_SECRET_KEY);
+	if (testAiApiKey) {
+		return { provider, apiKey: testAiApiKey };
+	}
+
+	const existing = await readAiApiKey(context, provider);
 	if (existing) {
-		return existing;
+		return { provider, apiKey: existing };
 	}
 
 	const action = await vscode.window.showWarningMessage(
-		'DeepSeek API key is not set. Save it with VS Code SecretStorage before using AI learning commands.',
+		`${provider.name} API key is not set. Save it with VS Code SecretStorage before using AI learning commands.`,
 		'Set API Key'
 	);
 
@@ -2295,8 +2405,101 @@ async function getDeepSeekApiKeyOrPrompt(context: vscode.ExtensionContext) {
 		return undefined;
 	}
 
-	const saved = await setDeepSeekApiKey(context);
-	return saved ? context.secrets.get(DEEPSEEK_SECRET_KEY) : undefined;
+	const saved = await setCurrentAiProviderApiKey(context);
+	const apiKey = saved ? await readAiApiKey(context, provider) : undefined;
+	return apiKey ? { provider, apiKey } : undefined;
+}
+
+async function getAiProviderAccessSilently(context: vscode.ExtensionContext) {
+	const provider = getCurrentAiProviderConfig();
+	if (!provider.requiresApiKey) {
+		return { provider };
+	}
+
+	if (testAiApiKey) {
+		return { provider, apiKey: testAiApiKey };
+	}
+
+	const apiKey = await readAiApiKey(context, provider);
+	return apiKey ? { provider, apiKey } : undefined;
+}
+
+async function readAiApiKey(context: vscode.ExtensionContext, provider: AiProviderConfig) {
+	const current = await context.secrets.get(toAiSecretKey(provider.id));
+	if (current) {
+		return current;
+	}
+
+	if (provider.id === 'deepseek') {
+		return context.secrets.get(DEEPSEEK_SECRET_KEY);
+	}
+
+	return undefined;
+}
+
+function toAiSecretKey(providerId: string) {
+	return `${AI_SECRET_KEY_PREFIX}${providerId}`;
+}
+
+function getCurrentAiProviderConfig() {
+	const aiConfig = vscode.workspace.getConfiguration('englishLearning.ai');
+	const providerId = aiConfig.get<string>('provider')?.trim() || DEFAULT_AI_PROVIDER_ID;
+	return getAiProviderConfig(providerId);
+}
+
+function getAiProviderConfig(providerId: string): AiProviderConfig {
+	const defaults = BUILTIN_AI_PROVIDERS[providerId] ?? BUILTIN_AI_PROVIDERS[DEFAULT_AI_PROVIDER_ID];
+	const overrides = readAiProviderOverrides(providerId);
+	const merged: AiProviderConfig = {
+		...defaults,
+		...overrides,
+		id: overrides.id?.trim() || defaults.id,
+		name: overrides.name?.trim() || defaults.name,
+		type: overrides.type ?? defaults.type,
+		baseUrl: overrides.baseUrl?.trim() || defaults.baseUrl,
+		model: overrides.model?.trim() || defaults.model,
+		temperature: typeof overrides.temperature === 'number' ? overrides.temperature : defaults.temperature,
+		requiresApiKey: typeof overrides.requiresApiKey === 'boolean' ? overrides.requiresApiKey : defaults.requiresApiKey,
+		disableThinking: typeof overrides.disableThinking === 'boolean' ? overrides.disableThinking : defaults.disableThinking
+	};
+
+	if (merged.id === 'deepseek') {
+		return applyLegacyDeepSeekFallback(merged, overrides);
+	}
+
+	return merged;
+}
+
+function readAiProviderOverrides(providerId: string): Partial<AiProviderConfig> {
+	const providers = vscode.workspace.getConfiguration('englishLearning.ai').get<Record<string, Partial<AiProviderConfig>>>('providers', {});
+	const override = providers?.[providerId];
+	if (!override || typeof override !== 'object') {
+		return {};
+	}
+
+	return override;
+}
+
+function applyLegacyDeepSeekFallback(provider: AiProviderConfig, overrides: Partial<AiProviderConfig>): AiProviderConfig {
+	const legacyConfig = vscode.workspace.getConfiguration('englishLearning.deepseek');
+	return {
+		...provider,
+		baseUrl: overrides.baseUrl?.trim() || legacyConfig.get<string>('baseUrl')?.trim() || provider.baseUrl,
+		model: overrides.model?.trim() || legacyConfig.get<string>('model')?.trim() || provider.model,
+		temperature: typeof overrides.temperature === 'number'
+			? overrides.temperature
+			: legacyConfig.get<number>('temperature') ?? provider.temperature
+	};
+}
+
+function toAiOptions(provider: AiProviderConfig): AiOptions {
+	return {
+		providerId: provider.id,
+		providerName: provider.name,
+		baseUrl: provider.baseUrl,
+		model: provider.model,
+		temperature: provider.temperature
+	};
 }
 
 function getSelectedText(): SelectedText | undefined {
@@ -2425,62 +2628,112 @@ function getNonEmptySelectionSnapshots(editor: vscode.TextEditor) {
 		.filter(selection => selection.text.trim().length > 0);
 }
 
-async function requestDeepSeek(apiKey: string, mode: DeepSeekRequestMode, text: string) {
-	if (testDeepSeekRequester) {
-		return testDeepSeekRequester(apiKey, mode, text);
+async function requestAi(aiAccess: AiProviderAccess, mode: AiRequestMode, text: string): Promise<AiResponse> {
+	if (testAiRequester) {
+		return testAiRequester(aiAccess.apiKey ?? '', mode, text);
 	}
 
-	const options = getDeepSeekOptions();
-	const client = new OpenAI({
-		apiKey,
-		baseURL: options.baseUrl
-	});
-
-	let content: string | null | undefined;
-
+	let content: string | undefined;
 	try {
-		const completion = await client.chat.completions.create(withDeepSeekNonThinking({
-			model: options.model,
-			temperature: options.temperature,
-			response_format: { type: 'json_object' },
-			messages: [
-				{
-					role: 'system',
-					content: `You are an English learning assistant for Chinese-speaking VS Code users. Respond only with valid json. Keep explanations concise and useful for language learning. ${ASCII_PUNCTUATION_PROMPT_RULE}`
-				},
-				{
-					role: 'user',
-					content: buildDeepSeekPrompt(mode, text)
-				}
-			]
-		}));
-
-		content = completion.choices[0]?.message?.content;
+		content = await requestAiJsonCompletion(aiAccess, {
+			temperature: aiAccess.provider.temperature,
+			systemPrompt: `You are an English learning assistant for Chinese-speaking VS Code users. Respond only with valid json. Keep explanations concise and useful for language learning. ${ASCII_PUNCTUATION_PROMPT_RULE}`,
+			userPrompt: buildAiPrompt(mode, text)
+		});
 	} catch (error) {
-		throw new Error(toDeepSeekErrorMessage(error));
+		throw new Error(toAiErrorMessage(error, aiAccess.provider));
 	}
 
 	if (!content) {
-		throw new Error('DeepSeek returned an empty response.');
+		throw new Error('AI provider returned an empty response.');
 	}
 
 	return {
-		options,
+		options: toAiOptions(aiAccess.provider),
 		result: parseAiLearningResult(content, text)
 	};
 }
 
-function getDeepSeekOptions(): DeepSeekOptions {
-	const config = vscode.workspace.getConfiguration('englishLearning.deepseek');
+async function requestAiJsonCompletion(aiAccess: AiProviderAccess, request: AiJsonCompletionRequest) {
+	return aiAccess.provider.type === 'ollama'
+		? requestOllamaJsonCompletion(aiAccess, request)
+		: requestOpenAiCompatibleJsonCompletion(aiAccess, request);
+}
 
+async function requestOpenAiCompatibleJsonCompletion(aiAccess: AiProviderAccess, request: AiJsonCompletionRequest) {
+	const client = new OpenAI({
+		apiKey: aiAccess.apiKey || 'local',
+		baseURL: aiAccess.provider.baseUrl
+	});
+
+	const completion = await client.chat.completions.create(buildOpenAiCompatibleChatParams(aiAccess.provider, request));
+
+	return completion.choices[0]?.message?.content ?? undefined;
+}
+
+export function buildOpenAiCompatibleChatParams(provider: AiProviderConfig, request: AiJsonCompletionRequest) {
+	return withProviderChatParams(provider, {
+		model: provider.model,
+		temperature: request.temperature,
+		response_format: { type: 'json_object' },
+		messages: [
+			{
+				role: 'system',
+				content: request.systemPrompt
+			},
+			{
+				role: 'user',
+				content: request.userPrompt
+			}
+		]
+	});
+}
+
+async function requestOllamaJsonCompletion(aiAccess: AiProviderAccess, request: AiJsonCompletionRequest) {
+	const response = await fetch(`${aiAccess.provider.baseUrl.replace(/\/+$/, '')}/api/chat`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify(buildOllamaChatRequestBody(aiAccess.provider, request))
+	});
+
+	if (!response.ok) {
+		throw createHttpError(response.status, await response.text());
+	}
+
+	const body = await response.json() as { message?: { content?: unknown }; response?: unknown };
+	const content = body.message?.content ?? body.response;
+	return typeof content === 'string' ? content : undefined;
+}
+
+export function buildOllamaChatRequestBody(provider: AiProviderConfig, request: AiJsonCompletionRequest) {
 	return {
-		baseUrl: config.get<string>('baseUrl')?.trim() || 'https://api.deepseek.com',
-		model: config.get<string>('model')?.trim() || 'deepseek-v4-flash',
-		temperature: config.get<number>('temperature') ?? 0.2
+		model: provider.model,
+		stream: false,
+		format: 'json',
+		options: {
+			temperature: request.temperature
+		},
+		messages: [
+			{
+				role: 'system',
+				content: request.systemPrompt
+			},
+			{
+				role: 'user',
+				content: request.userPrompt
+			}
+		]
 	};
 }
 
-function buildDeepSeekPrompt(mode: DeepSeekRequestMode, text: string) {
+function createHttpError(status: number, body: string) {
+	const error = new Error(body || `HTTP ${status}`);
+	return Object.assign(error, { status });
+}
+
+function buildAiPrompt(mode: AiRequestMode, text: string) {
 	if (mode === 'contextExplain') {
 		return `Explain the selected text based on its sentence context.
 
@@ -2692,7 +2945,7 @@ function parseJsonObject(content: string): Record<string, unknown> {
 
 	const parsed: unknown = JSON.parse(trimmed);
 	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-		throw new Error('DeepSeek JSON response was not an object.');
+		throw new Error('AI provider JSON response was not an object.');
 	}
 
 	return parsed as Record<string, unknown>;
@@ -2744,7 +2997,7 @@ function toEnlearnBlock(sourceText: string, result: AiLearningResult, model: str
 		'',
 		'@level auto',
 		'@topic AI Generated',
-		'@source deepseek',
+		'@source ai',
 		`@created ${formatLocalDate(new Date())}`,
 		`@model ${model}`,
 		`@direction ${result.direction}`,
@@ -3126,35 +3379,44 @@ function getProgressTitle(mode: LearningMode) {
 	}[mode];
 }
 
-function toDeepSeekErrorMessage(error: unknown) {
+function toAiErrorMessage(error: unknown, provider: AiProviderConfig) {
 	const status = readStatusCode(error);
 	const bodyMessage = readErrorMessage(error);
+	const providerName = provider.name;
+
+	if (provider.type === 'ollama' && !status) {
+		return `${providerName} request failed. Please confirm Ollama is running and listening at ${provider.baseUrl}.`;
+	}
+
+	if (!provider.requiresApiKey && !status && /ECONNREFUSED|fetch failed|Failed to fetch|connect/i.test(bodyMessage ?? '')) {
+		return `${providerName} request failed. Please confirm the local AI service is running and listening at ${provider.baseUrl}.`;
+	}
 
 	if (status === 401) {
-		return 'DeepSeek rejected the API key (401). Run "English Learning Plugin: Set DeepSeek API Key" and save a valid key.';
+		return `${providerName} rejected the API key (401). Run "English Learning Plugin: Set Current AI Provider API Key" and save a valid key.`;
 	}
 
 	if (status === 402) {
-		return 'DeepSeek account balance is insufficient (402). Check billing before retrying.';
+		return `${providerName} account balance is insufficient (402). Check billing before retrying.`;
 	}
 
 	if (status === 429) {
-		return 'DeepSeek rate limit was reached (429). Wait and retry later.';
+		return `${providerName} rate limit was reached (429). Wait and retry later.`;
 	}
 
 	if (status === 500) {
-		return 'DeepSeek returned an internal server error (500). Retry later.';
+		return `${providerName} returned an internal server error (500). Retry later.`;
 	}
 
 	if (status === 503) {
-		return 'DeepSeek service is busy or unavailable (503). Retry later.';
+		return `${providerName} service is busy or unavailable (503). Retry later.`;
 	}
 
 	if (status) {
-		return `DeepSeek request failed with HTTP ${status}${bodyMessage ? `: ${bodyMessage}` : '.'}`;
+		return `${providerName} request failed with HTTP ${status}${bodyMessage ? `: ${bodyMessage}` : '.'}`;
 	}
 
-	return bodyMessage ? `DeepSeek request failed: ${bodyMessage}` : 'DeepSeek request failed.';
+	return bodyMessage ? `${providerName} request failed: ${bodyMessage}` : `${providerName} request failed.`;
 }
 
 function readStatusCode(error: unknown) {
