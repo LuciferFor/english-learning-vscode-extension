@@ -34,7 +34,7 @@
 
 - `Ctrl+Shift+Alt+Q`：按当前语句上下文解释选中文本，并把 `（PS: ...）` 插入到语句末尾。
 - `Ctrl+Shift+Alt+W`：中英互译选中文本；选中单个英文单词时把释义插入到词后，例如 `lesson(课)`，选中句子时把译文插入到下一行。
-- `Ctrl+Shift+Alt+E`：总结选中文本；无选中时总结当前 `.enlearn` 文件。
+- `Ctrl+Shift+Alt+E`：总结选中文本；无选中时总结当前 `.enlearn` 文件，并在同目录保存为 `<当前文件名>.summary.md`。
 - `Ctrl+Shift+Alt+A`：回答选中的问题；只发送选区和上下各 3 行上下文，答案插入到问题下一行。
 - `Ctrl+Shift+Alt+C`：无选中时在文件底部生成 3 道练习；有选中时批改选中答案并把反馈插入下一行。
 - `Ctrl+Shift+Alt+Z`：根据选中文本插入 `.enlearn` 学习块。

@@ -1,4 +1,7 @@
 import * as assert from 'assert';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
 	extractCheckableEnglishSegments,
@@ -55,6 +58,27 @@ interface EnglishLearningTestExports {
 		apiKey?: string;
 		requester?: (apiKey: string, mode: string, text: string) => Promise<unknown>;
 	}): void;
+}
+
+async function removeDirectoryWithRetry(directory: string) {
+	for (let attempt = 0; attempt < 10; attempt += 1) {
+		try {
+			await fs.rm(directory, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			if (attempt === 9 || !isRetryableRemoveError(error)) {
+				throw error;
+			}
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+	}
+}
+
+function isRetryableRemoveError(error: unknown) {
+	const code = typeof error === 'object' && error !== null && 'code' in error
+		? String((error as { code?: unknown }).code)
+		: '';
+	return code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY';
 }
 
 suite('English Learning Plugin extension', () => {
@@ -178,6 +202,150 @@ suite('English Learning Plugin extension', () => {
 		assert.ok(SIDEBAR_KEY_ICON_SIZE_PX >= 48);
 		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX >= 40);
 		assert.ok(SIDEBAR_ACTION_ICON_SIZE_PX <= 48);
+	});
+
+	test('summary command saves markdown next to the source .enlearn file', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'enlearn-summary-'));
+		const sourcePath = path.join(tempDir, '第一天.enlearn');
+		const summaryPath = path.join(tempDir, '第一天.enlearn.summary.md');
+
+		await fs.writeFile(sourcePath, 'I can study every day.\n', 'utf8');
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'summarize');
+				assert.strictEqual(text, 'I can study every day.');
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						summary: 'This lesson is about daily study.',
+						translation: '我每天都能学习.',
+						explanation: 'Focus on can + verb.',
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+			await vscode.window.showTextDocument(document);
+
+			await vscode.commands.executeCommand('englishLearning.summarizeLearningContent');
+
+			const summary = await fs.readFile(summaryPath, 'utf8');
+			assert.ok(summary.includes('# Learning Summary'));
+			assert.ok(summary.includes('This lesson is about daily study.'));
+			assert.ok(summary.includes('I can study every day.'));
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+			await removeDirectoryWithRetry(tempDir);
+		}
+	});
+
+	test('summary command increments filename and only summarizes selected text', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'enlearn-summary-'));
+		const sourcePath = path.join(tempDir, 'practice.enlearn');
+		const existingSummaryPath = path.join(tempDir, 'practice.enlearn.summary.md');
+		const nextSummaryPath = path.join(tempDir, 'practice.enlearn.summary-2.md');
+
+		await fs.writeFile(sourcePath, 'Line one.\nSelected sentence.\nLine three.\n', 'utf8');
+		await fs.writeFile(existingSummaryPath, 'old summary', 'utf8');
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async (_apiKey, mode, text) => {
+				assert.strictEqual(mode, 'summarize');
+				assert.strictEqual(text, 'Selected sentence.');
+
+				return {
+					options: {
+						baseUrl: 'https://api.deepseek.com',
+						model: 'deepseek-v4-flash',
+						temperature: 0.2
+					},
+					result: {
+						summary: 'Selected only.',
+						translation: undefined,
+						explanation: undefined,
+						notes: [],
+						grammar: [],
+						examples: [],
+						practice: [],
+						vocabulary: [],
+						direction: 'en-to-zh'
+					}
+				};
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+			const editor = await vscode.window.showTextDocument(document);
+			editor.selection = new vscode.Selection(
+				new vscode.Position(1, 0),
+				new vscode.Position(1, 'Selected sentence.'.length)
+			);
+
+			await vscode.commands.executeCommand('englishLearning.summarizeLearningContent');
+
+			assert.strictEqual(await fs.readFile(existingSummaryPath, 'utf8'), 'old summary');
+			const summary = await fs.readFile(nextSummaryPath, 'utf8');
+			assert.ok(summary.includes('Selected only.'));
+			assert.ok(summary.includes('Selected sentence.'));
+			assert.ok(!summary.includes('Line one.'));
+			assert.ok(!summary.includes('Line three.'));
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+			await removeDirectoryWithRetry(tempDir);
+		}
+	});
+
+	test('summary command does not call AI for unsaved documents', async () => {
+		const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'english-learning-plugin');
+		assert.ok(extension);
+		const exports = await extension.activate() as EnglishLearningTestExports;
+		let called = false;
+
+		exports.setDeepSeekTestOverrides({
+			apiKey: 'test-api-key',
+			requester: async () => {
+				called = true;
+				throw new Error('AI should not be called for unsaved summary documents.');
+			}
+		});
+
+		try {
+			const document = await vscode.workspace.openTextDocument({
+				content: 'I can study every day.\n',
+				language: 'enlearn'
+			});
+			await vscode.window.showTextDocument(document);
+
+			await vscode.commands.executeCommand('englishLearning.summarizeLearningContent');
+
+			assert.strictEqual(called, false);
+		} finally {
+			exports.setDeepSeekTestOverrides();
+			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}
 	});
 
 	test('contributes validation and highlighting settings', () => {

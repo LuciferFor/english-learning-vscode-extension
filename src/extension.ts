@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'node:child_process';
+import * as path from 'node:path';
 import OpenAI from 'openai';
 import { EdgeTTS } from 'node-edge-tts';
 import * as vscode from 'vscode';
@@ -57,6 +58,7 @@ const DEEPSEEK_SECRET_KEY = 'englishLearning.deepseek.apiKey';
 const LEARNING_RECORDS_KEY = 'englishLearning.records';
 const MAX_LEARNING_RECORDS = 200;
 const ENLEARN_LANGUAGE_ID = 'enlearn';
+const SUMMARY_FILE_SUFFIX = '.summary';
 export const ANSWER_CONTEXT_LINES = 3;
 export const ANSWER_MAX_ESTIMATED_TOKENS = 1000;
 const ASCII_PUNCTUATION_PROMPT_RULE = 'All punctuation in JSON string values must be ASCII punctuation only. Use , . : ; ? ! ( ) " \' instead of Chinese punctuation, even when the text is Chinese.';
@@ -1732,6 +1734,11 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 		return;
 	}
 
+	if (!canSaveSummaryNextToDocument(target.editor.document)) {
+		vscode.window.showWarningMessage('Save the current .enlearn file before summarizing to a summary file.');
+		return;
+	}
+
 	const apiKey = await getDeepSeekApiKeyOrPrompt(context);
 	if (!apiKey) {
 		return;
@@ -1759,7 +1766,7 @@ async function summarizeLearningContent(context: vscode.ExtensionContext) {
 				model: response.options.model
 			});
 
-			await showMarkdownDocument(content);
+			await saveSummaryMarkdownDocument(target.editor.document, content);
 		} catch (error) {
 			handleCommandError(error);
 		}
@@ -2864,6 +2871,54 @@ function sanitizePracticePrompt(value: string) {
 async function saveLearningRecord(context: vscode.ExtensionContext, record: LearningRecord) {
 	const existing = context.globalState.get<LearningRecord[]>(LEARNING_RECORDS_KEY, []);
 	await context.globalState.update(LEARNING_RECORDS_KEY, [record, ...existing].slice(0, MAX_LEARNING_RECORDS));
+}
+
+function canSaveSummaryNextToDocument(document: vscode.TextDocument) {
+	return document.uri.scheme === 'file' && document.uri.fsPath.trim().length > 0;
+}
+
+async function saveSummaryMarkdownDocument(sourceDocument: vscode.TextDocument, content: string) {
+	const targetUri = await resolveAvailableSummaryMarkdownUri(sourceDocument.uri);
+	await vscode.workspace.fs.writeFile(targetUri, Buffer.from(content, 'utf8'));
+
+	const document = await vscode.workspace.openTextDocument(targetUri);
+	await vscode.window.showTextDocument(document, {
+		preview: false,
+		viewColumn: vscode.ViewColumn.Beside
+	});
+	void vscode.window.showInformationMessage(`Learning summary saved: ${targetUri.fsPath}`);
+}
+
+async function resolveAvailableSummaryMarkdownUri(sourceUri: vscode.Uri) {
+	const directory = path.dirname(sourceUri.fsPath);
+	const baseName = path.basename(sourceUri.fsPath);
+
+	for (let index = 1; index <= 1000; index += 1) {
+		const suffix = index === 1 ? `${SUMMARY_FILE_SUFFIX}.md` : `${SUMMARY_FILE_SUFFIX}-${index}.md`;
+		const candidate = vscode.Uri.file(path.join(directory, `${baseName}${suffix}`));
+		if (!await summaryFileExists(candidate)) {
+			return candidate;
+		}
+	}
+
+	throw new Error('Could not find an available summary filename.');
+}
+
+async function summaryFileExists(uri: vscode.Uri) {
+	try {
+		await vscode.workspace.fs.stat(uri);
+		return true;
+	} catch (error) {
+		if (isFileNotFoundError(error)) {
+			return false;
+		}
+		throw error;
+	}
+}
+
+function isFileNotFoundError(error: unknown) {
+	return (error instanceof vscode.FileSystemError && error.code === 'FileNotFound')
+		|| (error instanceof Error && /FileNotFound|ENOENT|not found/i.test(error.message));
 }
 
 async function showMarkdownDocument(content: string) {
